@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -29,13 +30,33 @@ type NotebookSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of Notebook. Edit Notebook_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	VolumeClaim []NotebookVolumeClaim `json:"volumeClaim"`
+	Template    NotebookTemplateSpec  `json:"template,omitempty"`
 }
 
 // NotebookStatus defines the observed state of Notebook
 type NotebookStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Conditions is an array of current conditions
+	Conditions []NotebookCondition `json:"conditions"`
+	// ReadyReplicas is the number of Pods created by the StatefulSet controller that have a Ready Condition.
+	ReadyReplicas int32 `json:"readyReplicas"`
+	// ContainerState is the state of underlying container.
+	ContainerState corev1.ContainerState `json:"containerState"`
+}
+
+// NotebookCondition defines the condition of Notebook
+type NotebookCondition struct {
+	// Type is the type of the condition. Possible values are Running|Waiting|Terminated
+	Type string `json:"type"`
+	// Last time we probed the condition.
+	// +optional
+	LastProbeTime metav1.Time `json:"lastProbeTime,omitempty"`
+	// (brief) reason the container is in the current state
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// Message regarding why the container is in the current state.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -57,6 +78,17 @@ type NotebookList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Notebook `json:"items"`
+}
+
+// NotebookVolumeClaim defines the volume spec of Notebook
+type NotebookVolumeClaim struct {
+	Name string `json:"name"`
+	Size string `json:"size"`
+}
+
+// NotebookTemplateSpec defines the spec of Notebook template
+type NotebookTemplateSpec struct {
+	Spec corev1.PodSpec `json:"spec,omitempty"`
 }
 
 func init() {
