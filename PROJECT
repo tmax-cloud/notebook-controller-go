@@ -1,7 +1,11 @@
 domain: tmax.io
 layout: go.kubebuilder.io/v2
 projectName: notebook-operator
-repo: https://github.com/tmax-cloud/notebook-operator-go.git
+repo: github.com/tmax-cloud/notebook-controller-go
+resources:
+- group: hyperflow
+  kind: Notebook
+  version: v1
 version: 3-alpha
 plugins:
   go.sdk.operatorframework.io/v2-alpha: {}
