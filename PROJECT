@@ -1,0 +1,7 @@
+domain: tmax.io
+layout: go.kubebuilder.io/v2
+projectName: notebook-operator
+repo: https://github.com/tmax-cloud/notebook-operator-go.git
+version: 3-alpha
+plugins:
+  go.sdk.operatorframework.io/v2-alpha: {}
