@@ -26,6 +26,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -109,6 +110,26 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, ignoreNotFound(err)
 	}
 
+	// Create PersistentVolumeClaim
+	pvc := generatePersistentVolumeClaim(instance)
+
+	// Check if the PersistentVolumeClaim already exists
+	foundPvc := &corev1.PersistentVolumeClaim{}
+	justCreated := false
+	err := r.Get(ctx, types.NamespacedName{Name: pvc.Name, Namespace: pvc.Namespace}, foundPvc)
+	if err != nil && apierrs.IsNotFound(err) {
+		log.Info("Creating PersistentVolumeClaim", "namespace", pvc.Namespace, "name", pvc.Name)
+		err = r.Create(ctx, pvc)
+		justCreated = true
+		if err != nil {
+			log.Error(err, "unable to create PersistentVolumeClaim")
+			return ctrl.Result{}, err
+		}
+	} else if err != nil {
+		log.Error(err, "error getting PersistentVolumeClaim")
+		return ctrl.Result{}, err
+	}
+
 	// Reconcile StatefulSet
 	ss := generateStatefulSet(instance)
 	if err := ctrl.SetControllerReference(instance, ss, r.Scheme); err != nil {
@@ -116,8 +137,8 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 	// Check if the StatefulSet already exists
 	foundStateful := &appsv1.StatefulSet{}
-	justCreated := false
-	err := r.Get(ctx, types.NamespacedName{Name: ss.Name, Namespace: ss.Namespace}, foundStateful)
+	justCreated = false
+	err = r.Get(ctx, types.NamespacedName{Name: ss.Name, Namespace: ss.Namespace}, foundStateful)
 	if err != nil && apierrs.IsNotFound(err) {
 		log.Info("Creating StatefulSet", "namespace", ss.Namespace, "name", ss.Name)
 		r.Metrics.NotebookCreation.WithLabelValues(ss.Namespace).Inc()
@@ -174,11 +195,9 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 
 	// Reconcile virtual service if we use ISTIO.
-	if os.Getenv("USE_ISTIO") == "true" {
-		err = r.reconcileVirtualService(instance)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
+	err = r.reconcileVirtualService(instance)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Update the readyReplicas if the status is changed
@@ -273,6 +292,31 @@ func getNextCondition(cs corev1.ContainerState) hyperflowv1.NotebookCondition {
 	return newCondition
 }
 
+func generatePersistentVolumeClaim(instance *hyperflowv1.Notebook) *corev1.PersistentVolumeClaim {
+	storageclass := "csi-cephfs-sc"
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "workspace-" + instance.Name,
+			Namespace: instance.Namespace,
+			Labels: map[string]string{
+				"notebook": instance.Name,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{
+				corev1.ReadWriteMany,
+			},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceName(corev1.ResourceStorage): resource.MustParse(instance.Spec.VolumeClaim[0].Size),
+				},
+			},
+			StorageClassName: &storageclass,
+		},
+	}
+	return pvc
+}
+
 func generateStatefulSet(instance *hyperflowv1.Notebook) *appsv1.StatefulSet {
 	replicas := int32(1)
 	if culler.StopAnnotationIsSet(instance.ObjectMeta) {
@@ -308,9 +352,11 @@ func generateStatefulSet(instance *hyperflowv1.Notebook) *appsv1.StatefulSet {
 
 	podSpec := &ss.Spec.Template.Spec
 	container := &podSpec.Containers[0]
+
 	if container.WorkingDir == "" {
 		container.WorkingDir = "/home/jovyan"
 	}
+
 	if container.Ports == nil {
 		container.Ports = []corev1.ContainerPort{
 			{
@@ -322,7 +368,7 @@ func generateStatefulSet(instance *hyperflowv1.Notebook) *appsv1.StatefulSet {
 	}
 	container.Env = append(container.Env, corev1.EnvVar{
 		Name:  "NB_PREFIX",
-		Value: "/notebook/" + instance.Namespace + "/" + instance.Name,
+		Value: "/api/kubeflow/notebook/" + instance.Namespace + "/" + instance.Name,
 	})
 
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
@@ -377,8 +423,8 @@ func generateVirtualService(instance *hyperflowv1.Notebook) (*unstructured.Unstr
 	name := instance.Name
 	namespace := instance.Namespace
 	clusterDomain := "cluster.local"
-	prefix := fmt.Sprintf("/notebook/%s/%s/", namespace, name)
-	rewrite := fmt.Sprintf("/notebook/%s/%s/", namespace, name)
+	prefix := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
+	rewrite := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
 	if clusterDomainFromEnv, ok := os.LookupEnv("CLUSTER_DOMAIN"); ok {
 		clusterDomain = clusterDomainFromEnv
 	}
@@ -516,16 +562,11 @@ func (r *NotebookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{})
 	// watch Istio virtual service
-	if os.Getenv("USE_ISTIO") == "true" {
-		virtualService := &unstructured.Unstructured{}
-		virtualService.SetAPIVersion("networking.istio.io/v1alpha3")
-		virtualService.SetKind("VirtualService")
-		builder.Owns(virtualService)
-	}
+	virtualService := &unstructured.Unstructured{}
+	virtualService.SetAPIVersion("networking.istio.io/v1alpha3")
+	virtualService.SetKind("VirtualService")
+	builder.Owns(virtualService)
 
-	// TODO(lunkai): After this is fixed:
-	// https://github.com/kubernetes-sigs/controller-runtime/issues/572
-	// We don't have to call Build to get the controller.
 	c, err := builder.Build(r)
 	if err != nil {
 		return err
