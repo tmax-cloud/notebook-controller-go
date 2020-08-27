@@ -30,7 +30,7 @@ type NotebookSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of Notebook. Edit Notebook_types.go to remove/update
-	VolumeClaim []NotebookVolumeClaim `json:"volumeClaim"`
+	VolumeClaim []NotebookVolumeClaim `json:"volumeClaim,omitempty"`
 	Template    NotebookTemplateSpec  `json:"template,omitempty"`
 }
 

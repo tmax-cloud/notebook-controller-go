@@ -370,7 +370,7 @@ func generateStatefulSet(instance *hyperflowv1.Notebook) *appsv1.StatefulSet {
 	}
 	container.Env = append(container.Env, corev1.EnvVar{
 		Name:  "NB_PREFIX",
-		Value: "/api/kubeflow/notebook/" + instance.Namespace + "/" + instance.Name,
+		Value: "/api/hyperflow/notebook/" + instance.Namespace + "/" + instance.Name,
 	})
 
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
@@ -425,8 +425,8 @@ func generateVirtualService(instance *hyperflowv1.Notebook) (*unstructured.Unstr
 	name := instance.Name
 	namespace := instance.Namespace
 	clusterDomain := "cluster.local"
-	prefix := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
-	rewrite := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
+	prefix := fmt.Sprintf("/api/hyperflow/notebook/%s/%s/", namespace, name)
+	rewrite := fmt.Sprintf("/api/hyperflow/notebook/%s/%s/", namespace, name)
 	if clusterDomainFromEnv, ok := os.LookupEnv("CLUSTER_DOMAIN"); ok {
 		clusterDomain = clusterDomainFromEnv
 	}
