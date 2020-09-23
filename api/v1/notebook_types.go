@@ -84,7 +84,7 @@ type NotebookList struct {
 type NotebookVolumeClaim struct {
 	Name         string `json:"name"`
 	Size         string `json:"size"`
-	StorageClass string `json:"storageClass"`
+	StorageClass string `json:"storageClass,omitempty"`
 }
 
 // NotebookTemplateSpec defines the spec of Notebook template
