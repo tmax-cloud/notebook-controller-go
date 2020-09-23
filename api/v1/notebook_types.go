@@ -82,8 +82,9 @@ type NotebookList struct {
 
 // NotebookVolumeClaim defines the volume spec of Notebook
 type NotebookVolumeClaim struct {
-	Name string `json:"name"`
-	Size string `json:"size"`
+	Name         string `json:"name"`
+	Size         string `json:"size"`
+	StorageClass string `json:"storageClass"`
 }
 
 // NotebookTemplateSpec defines the spec of Notebook template
