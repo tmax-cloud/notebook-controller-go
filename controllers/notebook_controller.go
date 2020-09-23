@@ -295,10 +295,10 @@ func getNextCondition(cs corev1.ContainerState) hyperflowv1.NotebookCondition {
 }
 
 func generatePersistentVolumeClaim(instance *hyperflowv1.Notebook) *corev1.PersistentVolumeClaim {
-	storageclass := instance.Spec.VolumeClaim.StorageClass
+	storageclass := instance.Spec.VolumeClaim[0].StorageClass
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Spec.VolumeClaim.Name,
+			Name:      instance.Spec.VolumeClaim[0].Name,
 			Namespace: instance.Namespace,
 			Labels: map[string]string{
 				"notebook": instance.Name,
