@@ -3,7 +3,7 @@ layout: go.kubebuilder.io/v2
 projectName: notebook-operator
 repo: github.com/tmax-cloud/notebook-controller-go
 resources:
-- group: hyperflow
+- group: kubeflow
   kind: Notebook
   version: v1
 version: 3-alpha

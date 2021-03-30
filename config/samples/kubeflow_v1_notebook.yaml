@@ -1,4 +1,4 @@
-apiVersion: hyperflow.tmax.io/v1
+apiVersion: kubeflow.tmax.io/v1
 kind: Notebook
 metadata:
   name: notebook-sample

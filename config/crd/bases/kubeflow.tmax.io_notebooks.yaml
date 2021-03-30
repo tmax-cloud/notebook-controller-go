@@ -6,9 +6,9 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.3.0
   creationTimestamp: null
-  name: notebooks.hyperflow.tmax.io
+  name: notebooks.kubeflow.tmax.io
 spec:
-  group: hyperflow.tmax.io
+  group: kubeflow.tmax.io
   names:
     kind: Notebook
     listKind: NotebookList
@@ -5801,13 +5801,13 @@ spec:
                     type: string
                   size:
                     type: string
+                  storageClass:
+                    type: string
                 required:
                 - name
                 - size
                 type: object
               type: array
-          required:
-          - volumeClaim
           type: object
         status:
           description: NotebookStatus defines the observed state of Notebook

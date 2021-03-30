@@ -19,7 +19,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	hyperflowv1 "github.com/tmax-cloud/notebook-controller-go/api/v1"
+	kubeflowv1 "github.com/tmax-cloud/notebook-controller-go/api/v1"
 	"github.com/tmax-cloud/notebook-controller-go/pkg/culler"
 	"github.com/tmax-cloud/notebook-controller-go/pkg/metrics"
 	reconcilehelper "github.com/tmax-cloud/notebook-controller-go/pkg/reconcilehelper"
@@ -88,7 +88,7 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	var getEventErr error
 	getEventErr = r.Get(ctx, req.NamespacedName, event)
 	if getEventErr == nil {
-		involvedNotebook := &hyperflowv1.Notebook{}
+		involvedNotebook := &kubeflowv1.Notebook{}
 		nbName, err := nbNameFromInvolvedObject(r.Client, &event.InvolvedObject)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -106,7 +106,7 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 	// If not found, continue. Is not an event.
 
-	instance := &hyperflowv1.Notebook{}
+	instance := &kubeflowv1.Notebook{}
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
 		log.Error(err, "unable to fetch Notebook")
 		return ctrl.Result{}, ignoreNotFound(err)
@@ -236,7 +236,7 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 				oldConditions[0].Reason != newCondition.Reason ||
 				oldConditions[0].Message != newCondition.Message {
 				log.Info("Appending to conditions: ", "namespace", instance.Namespace, "name", instance.Name, "type", newCondition.Type, "reason", newCondition.Reason, "message", newCondition.Message)
-				instance.Status.Conditions = append([]hyperflowv1.NotebookCondition{newCondition}, oldConditions...)
+				instance.Status.Conditions = append([]kubeflowv1.NotebookCondition{newCondition}, oldConditions...)
 			}
 			err = r.Status().Update(ctx, instance)
 			if err != nil {
@@ -268,7 +268,7 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
-func getNextCondition(cs corev1.ContainerState) hyperflowv1.NotebookCondition {
+func getNextCondition(cs corev1.ContainerState) kubeflowv1.NotebookCondition {
 	var nbtype = ""
 	var nbreason = ""
 	var nbmsg = ""
@@ -285,7 +285,7 @@ func getNextCondition(cs corev1.ContainerState) hyperflowv1.NotebookCondition {
 		nbmsg = cs.Terminated.Reason
 	}
 
-	newCondition := hyperflowv1.NotebookCondition{
+	newCondition := kubeflowv1.NotebookCondition{
 		Type:          nbtype,
 		LastProbeTime: metav1.Now(),
 		Reason:        nbreason,
@@ -294,7 +294,7 @@ func getNextCondition(cs corev1.ContainerState) hyperflowv1.NotebookCondition {
 	return newCondition
 }
 
-func generatePersistentVolumeClaim(instance *hyperflowv1.Notebook) *corev1.PersistentVolumeClaim {
+func generatePersistentVolumeClaim(instance *kubeflowv1.Notebook) *corev1.PersistentVolumeClaim {
 	storageclass := instance.Spec.VolumeClaim[0].StorageClass
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -319,7 +319,7 @@ func generatePersistentVolumeClaim(instance *hyperflowv1.Notebook) *corev1.Persi
 	return pvc
 }
 
-func generateStatefulSet(instance *hyperflowv1.Notebook) *appsv1.StatefulSet {
+func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 	replicas := int32(1)
 	if culler.StopAnnotationIsSet(instance.ObjectMeta) {
 		replicas = 0
@@ -370,7 +370,7 @@ func generateStatefulSet(instance *hyperflowv1.Notebook) *appsv1.StatefulSet {
 	}
 	container.Env = append(container.Env, corev1.EnvVar{
 		Name:  "NB_PREFIX",
-		Value: "/api/hyperflow/notebook/" + instance.Namespace + "/" + instance.Name,
+		Value: "/api/kubeflow/notebook/" + instance.Namespace + "/" + instance.Name,
 	})
 
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
@@ -388,7 +388,7 @@ func generateStatefulSet(instance *hyperflowv1.Notebook) *appsv1.StatefulSet {
 	return ss
 }
 
-func generateService(instance *hyperflowv1.Notebook) *corev1.Service {
+func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 	// Define the desired Service object
 	port := DefaultContainerPort
 	containerPorts := instance.Spec.Template.Spec.Containers[0].Ports
@@ -421,12 +421,12 @@ func virtualServiceName(kfName string, namespace string) string {
 	return fmt.Sprintf("notebook-%s-%s", namespace, kfName)
 }
 
-func generateVirtualService(instance *hyperflowv1.Notebook) (*unstructured.Unstructured, error) {
+func generateVirtualService(instance *kubeflowv1.Notebook) (*unstructured.Unstructured, error) {
 	name := instance.Name
 	namespace := instance.Namespace
 	clusterDomain := "cluster.local"
-	prefix := fmt.Sprintf("/api/hyperflow/notebook/%s/%s/", namespace, name)
-	rewrite := fmt.Sprintf("/api/hyperflow/notebook/%s/%s/", namespace, name)
+	prefix := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
+	rewrite := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
 	if clusterDomainFromEnv, ok := os.LookupEnv("CLUSTER_DOMAIN"); ok {
 		clusterDomain = clusterDomainFromEnv
 	}
@@ -483,7 +483,7 @@ func generateVirtualService(instance *hyperflowv1.Notebook) (*unstructured.Unstr
 
 }
 
-func (r *NotebookReconciler) reconcileVirtualService(instance *hyperflowv1.Notebook) error {
+func (r *NotebookReconciler) reconcileVirtualService(instance *kubeflowv1.Notebook) error {
 	log := r.Log.WithValues("notebook", instance.Namespace)
 	virtualService, err := generateVirtualService(instance)
 	if err := ctrl.SetControllerReference(instance, virtualService, r.Scheme); err != nil {
@@ -551,7 +551,7 @@ func nbNameFromInvolvedObject(c client.Client, object *corev1.ObjectReference) (
 }
 
 func nbNameExists(client client.Client, nbName string, namespace string) bool {
-	if err := client.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: nbName}, &hyperflowv1.Notebook{}); err != nil {
+	if err := client.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: nbName}, &kubeflowv1.Notebook{}); err != nil {
 		// If error != NotFound, trigger the reconcile call anyway to avoid loosing a potential relevant event
 		return !apierrs.IsNotFound(err)
 	}
@@ -560,7 +560,7 @@ func nbNameExists(client client.Client, nbName string, namespace string) bool {
 
 func (r *NotebookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
-		For(&hyperflowv1.Notebook{}).
+		For(&kubeflowv1.Notebook{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{})
 	// watch Istio virtual service
