@@ -8,5 +8,9 @@ roleRef:
   name: leader-election-role
 subjects:
 - kind: ServiceAccount
+<<<<<<< HEAD
   name: controller-manager
+=======
+  name: default
+>>>>>>> b426b88f30c2b46f44344326ab6703302cbd62d1
   namespace: system
