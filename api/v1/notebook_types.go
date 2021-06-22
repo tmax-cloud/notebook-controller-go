@@ -1,8 +1,11 @@
 /*
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
+
     http://www.apache.org/licenses/LICENSE-2.0
+
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,10 +27,11 @@ import (
 type NotebookSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+	Template NotebookTemplateSpec `json:"template,omitempty"`
+}
 
-	// Foo is an example field of Notebook. Edit Notebook_types.go to remove/update
-	VolumeClaim []NotebookVolumeClaim `json:"volumeClaim,omitempty"`
-	Template    NotebookTemplateSpec  `json:"template,omitempty"`
+type NotebookTemplateSpec struct {
+	Spec corev1.PodSpec `json:"spec,omitempty"`
 }
 
 // NotebookStatus defines the observed state of Notebook
@@ -40,7 +44,6 @@ type NotebookStatus struct {
 	ContainerState corev1.ContainerState `json:"containerState"`
 }
 
-// NotebookCondition defines the condition of Notebook
 type NotebookCondition struct {
 	// Type is the type of the condition. Possible values are Running|Waiting|Terminated
 	Type string `json:"type"`
@@ -57,7 +60,8 @@ type NotebookCondition struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
+// +kubebuilder:storageversion
+// +kubebuilder:resource:path=notebooks,singular=notebook,scope=Namespaced
 // Notebook is the Schema for the notebooks API
 type Notebook struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -68,24 +72,11 @@ type Notebook struct {
 }
 
 // +kubebuilder:object:root=true
-
 // NotebookList contains a list of Notebook
 type NotebookList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Notebook `json:"items"`
-}
-
-// NotebookVolumeClaim defines the volume spec of Notebook
-type NotebookVolumeClaim struct {
-	Name         string `json:"name"`
-	Size         string `json:"size"`
-	StorageClass string `json:"storageClass,omitempty"`
-}
-
-// NotebookTemplateSpec defines the spec of Notebook template
-type NotebookTemplateSpec struct {
-	Spec corev1.PodSpec `json:"spec,omitempty"`
 }
 
 func init() {

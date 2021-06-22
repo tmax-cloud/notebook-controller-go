@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tmax-cloud/notebook-controller-go/pkg/metrics"
+	"github.com/kubeflow/kubeflow/components/notebook-controller/pkg/metrics"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 )
 
 var log = logf.Log.WithName("culler")
