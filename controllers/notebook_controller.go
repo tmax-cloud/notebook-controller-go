@@ -298,26 +298,51 @@ func getNextCondition(cs corev1.ContainerState) kubeflowv1.NotebookCondition {
 
 func generatePersistentVolumeClaim(instance *kubeflowv1.Notebook) *corev1.PersistentVolumeClaim {
 	storageclass := instance.Spec.VolumeClaim[0].StorageClass
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Spec.VolumeClaim[0].Name,
-			Namespace: instance.Namespace,
-			Labels: map[string]string{
-				"notebook": instance.Name,
-			},
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteMany,
-			},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceName(corev1.ResourceStorage): resource.MustParse(instance.Spec.VolumeClaim[0].Size),
+	pvc := &corev1.PersistentVolumeClaim{}
+
+	if storageclass != "" {
+		pvc = &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instance.Spec.VolumeClaim[0].Name,
+				Namespace: instance.Namespace,
+				Labels: map[string]string{
+					"notebook": instance.Name,
 				},
 			},
-			StorageClassName: &storageclass,
-		},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{
+					corev1.ReadWriteMany,
+				},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceName(corev1.ResourceStorage): resource.MustParse(instance.Spec.VolumeClaim[0].Size),
+					},
+				},
+				StorageClassName: &storageclass,
+			},
+		}
+	} else {
+		pvc = &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instance.Spec.VolumeClaim[0].Name,
+				Namespace: instance.Namespace,
+				Labels: map[string]string{
+					"notebook": instance.Name,
+				},
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{
+					corev1.ReadWriteMany,
+				},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceName(corev1.ResourceStorage): resource.MustParse(instance.Spec.VolumeClaim[0].Size),
+					},
+				},
+			},
+		}
 	}
+
 	return pvc
 }
 
