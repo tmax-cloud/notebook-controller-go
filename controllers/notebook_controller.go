@@ -85,6 +85,30 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
 	log := r.Log.WithValues("notebook", req.NamespacedName)
 
+/*	gocloakClient := gocloak.NewClient("https://hyperauth.192.168.9.141.nip.io/")
+	gocloakCtx := context.Background()
+	token, err := gocloakClient.Login(ctx, "hypercloud5", "", "tmax", "hc-admin@tmax.co.kr", "admin")
+	if err != nil {
+		log.Error(err, "Something wrong with the credentials or url")
+	}
+
+	clientID := ""
+	clients, err := gocloakClient.GetClients(ctx, token.AccessToken, "tmax", gocloak.GetClientsParams{})
+	for _, cl := range clients {
+		if *cl.Name == "notebook-gatekeeper" {
+			clientID = *cl.ID
+			break
+		}
+	}
+
+	credential, err := gocloakClient.GetClientSecret(gocloakCtx, token.AccessToken, "tmax", clientID)
+	if err != nil {
+		log.Error(err, "Something wrong with getting client secret")
+	} 
+*/
+
+
+	 
 	// TODO(yanniszark): Can we avoid reconciling Events and Notebook in the same queue?
 	event := &corev1.Event{}
 	var getEventErr error
@@ -365,10 +389,15 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 				},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
-					"statefulset":   instance.Name,
-					"notebook-name": instance.Name,
-				}},
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"sidecar.istio.io/inject": "false",
+					},
+					Labels: map[string]string{
+						"statefulset":   instance.Name,
+						"notebook-name": instance.Name,
+					},
+				},
 				Spec: instance.Spec.Template.Spec,
 			},
 		},
@@ -398,8 +427,36 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 	container.Env = append(container.Env, corev1.EnvVar{
 		Name:  "NB_PREFIX",
 		Value: "/api/kubeflow/notebook/" + instance.Namespace + "/" + instance.Name,
+	})	
+	
+	clientsecret := os.Getenv("CLIENT_SECRET")
+    discoveryurl := os.Getenv("DISCOVERY_URL")
+			
+	podSpec.Containers = append(podSpec.Containers, corev1.Container{
+		Name:  "gatekeeper",
+		Image: "quay.io/keycloak/keycloak-gatekeeper:10.0.0",
+		Args: []string{
+			"--client-id=notebook-gatekeeper",
+			"--client-secret=" + clientsecret,
+			"--listen=:3000",
+			"--upstream-url=http://127.0.0.1:8888",
+			"--discovery-url=" + discoveryurl,
+			"--secure-cookie=false",
+			"--skip-openid-provider-tls-verify=true",
+			"--skip-upstream-tls-verify=true",
+			"--enable-self-signed-tls",
+			"--enable-default-deny=true",
+			"--resources=uri=/*|roles=notebook-gatekeeper:notebook-gatekeeper-manager",
+			"--verbose",
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "service",
+				ContainerPort: 3000,
+			},
+		},	
 	})
-
+	
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
 	// This allows for those platforms to bypass the automatic addition of the fsGroup
 	// and will allow for the Pod Security Policy controller to make an appropriate choice
