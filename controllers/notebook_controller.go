@@ -474,11 +474,11 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 
 func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 	// Define the desired Service object
-	port := DefaultContainerPort
-	containerPorts := instance.Spec.Template.Spec.Containers[0].Ports
+//	port := DefaultContainerPort
+/*	containerPorts := instance.Spec.Template.Spec.Containers[0].Ports
 	if containerPorts != nil {
 		port = int(containerPorts[0].ContainerPort)
-	}
+	}*/
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name,
@@ -492,7 +492,7 @@ func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 					// Make port name follow Istio pattern so it can be managed by istio rbac
 					Name:       "http-" + instance.Name,
 					Port:       DefaultServingPort,
-					TargetPort: intstr.FromInt(port),
+					TargetPort: intstr.FromInt(3000),
 					Protocol:   "TCP",
 				},
 			},
