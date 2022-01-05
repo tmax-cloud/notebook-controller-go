@@ -44,6 +44,7 @@ import (
 
 const DefaultContainerPort = 8888
 const DefaultServingPort = 80
+const HttpsServingPort = 443
 const AnnotationRewriteURI = "notebooks.kubeflow.org/http-rewrite-uri"
 const AnnotationHeadersRequestSet = "notebooks.kubeflow.org/http-headers-request-set"
 
@@ -442,10 +443,14 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 			"--upstream-url=http://127.0.0.1:8888",
 			"--discovery-url=" + discoveryurl,
 			"--secure-cookie=false",
+			"--upstream-keepalives=false",
 			"--skip-openid-provider-tls-verify=true",
 			"--skip-upstream-tls-verify=true",
 			"--enable-self-signed-tls",
+			"--enable-refresh-tokens=true",
 			"--enable-default-deny=true",
+			"--enable-metrics=true",
+			"--encryption-key=AgXa7xRcoClDEU0ZDSH4X0XhL5Qy2Z2j",
 			"--resources=uri=/*|roles=notebook-gatekeeper:notebook-gatekeeper-manager",
 			"--verbose",
 		},
@@ -454,7 +459,7 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 				Name:          "service",
 				ContainerPort: 3000,
 			},
-		},	
+		},			
 	})
 	
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
@@ -490,8 +495,8 @@ func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 			Ports: []corev1.ServicePort{
 				{
 					// Make port name follow Istio pattern so it can be managed by istio rbac
-					Name:       "http-" + instance.Name,
-					Port:       DefaultServingPort,
+					Name:       "https-" + instance.Name,
+					Port:       int32(HttpsServingPort),
 					TargetPort: intstr.FromInt(3000),
 					Protocol:   "TCP",
 				},
@@ -534,7 +539,7 @@ func generateVirtualService(instance *kubeflowv1.Notebook) (*unstructured.Unstru
 		return nil, fmt.Errorf("Set .spec.gateways error: %v", err)
 	}
 
-	http := []interface{}{
+	tls := []interface{}{
 		map[string]interface{}{
 			"match": []interface{}{
 				map[string]interface{}{
@@ -551,7 +556,7 @@ func generateVirtualService(instance *kubeflowv1.Notebook) (*unstructured.Unstru
 					"destination": map[string]interface{}{
 						"host": service,
 						"port": map[string]interface{}{
-							"number": int64(DefaultServingPort),
+							"number": int64(HttpsServingPort),
 						},
 					},
 				},
@@ -559,8 +564,8 @@ func generateVirtualService(instance *kubeflowv1.Notebook) (*unstructured.Unstru
 			"timeout": "300s",
 		},
 	}
-	if err := unstructured.SetNestedSlice(vsvc.Object, http, "spec", "http"); err != nil {
-		return nil, fmt.Errorf("Set .spec.http error: %v", err)
+	if err := unstructured.SetNestedSlice(vsvc.Object, tls, "spec", "tls"); err != nil {
+		return nil, fmt.Errorf("Set .spec.tls error: %v", err)
 	}
 
 	return vsvc, nil
