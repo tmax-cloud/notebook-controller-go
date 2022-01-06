@@ -411,6 +411,7 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 
 	podSpec := &ss.Spec.Template.Spec
 	container := &podSpec.Containers[0]
+//	volumes := &podSpec.Volumes[0]
 
 	if container.WorkingDir == "" {
 		container.WorkingDir = "/home/jovyan"
@@ -460,6 +461,21 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 				ContainerPort: 3000,
 			},
 		},			
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "secret",
+				MountPath: "/etc/secrets",
+			},
+		},
+	})
+
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: "secret",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: "notebook-secret",
+			},
+		},
 	})
 	
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
@@ -539,7 +555,7 @@ func generateVirtualService(instance *kubeflowv1.Notebook) (*unstructured.Unstru
 		return nil, fmt.Errorf("Set .spec.gateways error: %v", err)
 	}
 
-	tls := []interface{}{
+	http := []interface{}{
 		map[string]interface{}{
 			"match": []interface{}{
 				map[string]interface{}{
@@ -564,8 +580,8 @@ func generateVirtualService(instance *kubeflowv1.Notebook) (*unstructured.Unstru
 			"timeout": "300s",
 		},
 	}
-	if err := unstructured.SetNestedSlice(vsvc.Object, tls, "spec", "tls"); err != nil {
-		return nil, fmt.Errorf("Set .spec.tls error: %v", err)
+	if err := unstructured.SetNestedSlice(vsvc.Object, http, "spec", "http"); err != nil {
+		return nil, fmt.Errorf("Set .spec.http error: %v", err)
 	}
 
 	return vsvc, nil
