@@ -26,10 +26,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/extensions/v1beta1"
+//	certv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
+//	cmmetav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-//	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -202,6 +204,11 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	// Reconcile Ingress
 	err = r.reconcileIngress(instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Reconcile Certificate
+	err = r.reconcileCertificate(instance)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -446,7 +453,7 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 		Name: "secret",
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName: "notebook-secret",
+				SecretName: instance.Name + "-secret",
 			},
 		},
 	})
@@ -594,6 +601,90 @@ func (r *NotebookReconciler) reconcileIngress(instance *kubeflowv1.Notebook) err
 	return nil
 }
 
+func certificateName(kfName string, namespace string) string {
+	return fmt.Sprintf("cert-%s-%s", namespace, kfName)
+}
+
+func generateCertificate(instance *kubeflowv1.Notebook) (*unstructured.Unstructured, error) {
+	name := instance.Name
+	namespace := instance.Namespace
+	cert := &unstructured.Unstructured{}
+	cert.SetAPIVersion("cert-manager.io/v1")
+	cert.SetKind("Certificate")
+	cert.SetName(certificateName(name, namespace))
+	cert.SetNamespace(namespace)
+	
+	secretname := fmt.Sprintf("%s-secret", name)
+	if err := unstructured.SetNestedField(cert.Object, secretname, "spec", "secretName"); err != nil {
+		return nil, fmt.Errorf("Set .spec.secretName error: %v", err)
+	}
+	var isca bool = false
+	if err := unstructured.SetNestedField(cert.Object, isca, "spec", "isCA"); err != nil {
+		return nil, fmt.Errorf("Set .spec.isCA error: %v", err)
+	}
+	dnsnames := []string{
+		"tmax-cloud",
+	}
+	if err := unstructured.SetNestedStringSlice(cert.Object, dnsnames, "spec", "dnsNames"); err != nil {
+		return nil, fmt.Errorf("Set .spec.dnsNames error: %v", err)
+	}
+	keyusage := []string{
+		"digital signature",
+		"key encipherment",
+		"server auth",
+		"client auth",
+	}
+	if err := unstructured.SetNestedStringSlice(cert.Object, keyusage, "spec", "usages"); err != nil {
+		return nil, fmt.Errorf("Set .spec.usages error: %v", err)
+	}
+
+	issuerref := map[string]string{
+		"group": "cert-manager.io",
+		"kind": "ClusterIssuer",
+		"name": "tmaxcloud-issuer",
+	}
+	
+	if err := unstructured.SetNestedStringMap(cert.Object, issuerref, "spec", "issuerRef"); err != nil {
+		return nil, fmt.Errorf("Set .spec.issuerref error: %v", err)
+	}	
+
+	return cert, nil
+}
+
+func (r *NotebookReconciler) reconcileCertificate(instance *kubeflowv1.Notebook) error {	
+	log := r.Log.WithValues("notebook", instance.Namespace)
+	certificate, err := generateCertificate(instance)
+	if err := ctrl.SetControllerReference(instance, certificate, r.Scheme); err != nil {
+		return err
+	}
+	// certificate 존재 체크
+	foundCertificate := &unstructured.Unstructured{}
+	justCreated := false
+	foundCertificate.SetAPIVersion("cert-manager.io/v1")
+	foundCertificate.SetKind("Certificate")	
+	err = r.Get(context.TODO(), types.NamespacedName{Name: certificateName(instance.Name,
+		instance.Namespace), Namespace: instance.Namespace}, foundCertificate)
+	if err != nil && apierrs.IsNotFound(err) {
+		log.Info("Creating Certificate", "namespace", instance.Namespace, "name", certificateName(instance.Name, instance.Namespace))
+		err = r.Create(context.TODO(), certificate)
+		justCreated = true
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+
+	if !justCreated && reconcilehelper.CopyCertificate(certificate, foundCertificate) {
+		log.Info("Updating Certificate\n", "namespace", instance.Namespace, "name", certificateName(instance.Name, instance.Namespace))
+		err = r.Update(context.TODO(), foundCertificate)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 func isStsOrPodEvent(event *corev1.Event) bool {
 	return event.InvolvedObject.Kind == "Pod" || event.InvolvedObject.Kind == "StatefulSet"
 }
@@ -640,7 +731,12 @@ func (r *NotebookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// watch Ingress
 	ingress := &netv1.Ingress{}	
 	builder.Owns(ingress)
-
+	// watch Certificate
+	certificate := &unstructured.Unstructured{}
+	certificate.SetAPIVersion("cert-manager.io/v1")
+	certificate.SetKind("Certificate")
+	builder.Owns(certificate)
+	
 	c, err := builder.Build(r)
 	if err != nil {
 		return err

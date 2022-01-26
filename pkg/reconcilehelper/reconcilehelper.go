@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/extensions/v1beta1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
-//	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -98,6 +98,36 @@ func Ingress(ctx context.Context, r client.Client, ingressName, namespace string
 
 	return nil
 }
+
+func Certificate(ctx context.Context, r client.Client, certificateName, namespace string, certificate *unstructured.Unstructured, log logr.Logger) error {
+	foundCertificate := &unstructured.Unstructured{}
+	foundCertificate.SetAPIVersion("cert-manager.io/v1")
+	foundCertificate.SetKind("Certificate")
+	justCreated := false	
+	if err := r.Get(ctx, types.NamespacedName{Name: certificateName, Namespace: namespace}, foundCertificate); err != nil {
+		if apierrs.IsNotFound(err) {
+			log.Info("Creating certificate", "namespace", namespace, "name", certificateName)
+			if err := r.Create(ctx, certificate); err != nil {
+				log.Error(err, "unable to create certificate")
+				return err
+			}
+			justCreated = true
+		} else {
+			log.Error(err, "error getting certificate")
+			return err
+		}
+	}
+	if !justCreated && CopyCertificate(certificate, foundCertificate) {
+		log.Info("Updating certificate", "namespace", namespace, "name", certificateName)
+		if err := r.Update(ctx, foundCertificate); err != nil {
+			log.Error(err, "unable to update certificate")
+			return err
+		}
+	}
+
+	return nil
+}
+
 
 // Reference: https://github.com/pwittrock/kubebuilder-workshop/blob/master/pkg/util/util.go
 
@@ -211,4 +241,26 @@ func CopyIngress(from, to *netv1.Ingress) bool {
 	to.Spec.Rules = from.Spec.Rules
 
 	return requireUpdate
+}
+
+func CopyCertificate(from, to *unstructured.Unstructured) bool {
+	fromSpec, found, err := unstructured.NestedMap(from.Object, "spec")
+	if !found {
+		return false
+	}
+	if err != nil {
+		return false
+	}
+
+	toSpec, found, err := unstructured.NestedMap(to.Object, "spec")
+	if !found || err != nil {
+		unstructured.SetNestedMap(to.Object, fromSpec, "spec")
+		return true
+	}
+
+	requiresUpdate := !reflect.DeepEqual(fromSpec, toSpec)
+	if requiresUpdate {
+		unstructured.SetNestedMap(to.Object, fromSpec, "spec")
+	}
+	return requiresUpdate
 }
