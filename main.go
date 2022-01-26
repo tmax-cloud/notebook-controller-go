@@ -44,7 +44,6 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
 	utilruntime.Must(kubeflowv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }

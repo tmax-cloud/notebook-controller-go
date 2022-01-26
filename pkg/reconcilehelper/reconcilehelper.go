@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/extensions/v1beta1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,35 +71,63 @@ func Service(ctx context.Context, r client.Client, service *corev1.Service, log 
 	return nil
 }
 
-// VirtualService reconciles an Istio virtual service object.
-func VirtualService(ctx context.Context, r client.Client, virtualServiceName, namespace string, virtualservice *unstructured.Unstructured, log logr.Logger) error {
-	foundVirtualService := &unstructured.Unstructured{}
-	foundVirtualService.SetAPIVersion("networking.istio.io/v1alpha3")
-	foundVirtualService.SetKind("VirtualService")
-	justCreated := false
-	if err := r.Get(ctx, types.NamespacedName{Name: virtualServiceName, Namespace: namespace}, foundVirtualService); err != nil {
+
+func Ingress(ctx context.Context, r client.Client, ingressName, namespace string, ingress *netv1.Ingress, log logr.Logger) error {
+	foundIngress := &netv1.Ingress{}
+	justCreated := false	
+	if err := r.Get(ctx, types.NamespacedName{Name: ingressName, Namespace: namespace}, foundIngress); err != nil {
 		if apierrs.IsNotFound(err) {
-			log.Info("Creating virtual service", "namespace", namespace, "name", virtualServiceName)
-			if err := r.Create(ctx, virtualservice); err != nil {
-				log.Error(err, "unable to create virtual service")
+			log.Info("Creating ingress", "namespace", namespace, "name", ingressName)
+			if err := r.Create(ctx, ingress); err != nil {
+				log.Error(err, "unable to create ingress")
 				return err
 			}
 			justCreated = true
 		} else {
-			log.Error(err, "error getting virtual service")
+			log.Error(err, "error getting ingress")
 			return err
 		}
 	}
-	if !justCreated && CopyVirtualService(virtualservice, foundVirtualService) {
-		log.Info("Updating virtual service", "namespace", namespace, "name", virtualServiceName)
-		if err := r.Update(ctx, foundVirtualService); err != nil {
-			log.Error(err, "unable to update virtual service")
+	if !justCreated && CopyIngress(ingress, foundIngress) {
+		log.Info("Updating ingress", "namespace", namespace, "name", ingressName)
+		if err := r.Update(ctx, foundIngress); err != nil {
+			log.Error(err, "unable to update ingress")
 			return err
 		}
 	}
 
 	return nil
 }
+
+func Certificate(ctx context.Context, r client.Client, certificateName, namespace string, certificate *unstructured.Unstructured, log logr.Logger) error {
+	foundCertificate := &unstructured.Unstructured{}
+	foundCertificate.SetAPIVersion("cert-manager.io/v1")
+	foundCertificate.SetKind("Certificate")
+	justCreated := false	
+	if err := r.Get(ctx, types.NamespacedName{Name: certificateName, Namespace: namespace}, foundCertificate); err != nil {
+		if apierrs.IsNotFound(err) {
+			log.Info("Creating certificate", "namespace", namespace, "name", certificateName)
+			if err := r.Create(ctx, certificate); err != nil {
+				log.Error(err, "unable to create certificate")
+				return err
+			}
+			justCreated = true
+		} else {
+			log.Error(err, "error getting certificate")
+			return err
+		}
+	}
+	if !justCreated && CopyCertificate(certificate, foundCertificate) {
+		log.Info("Updating certificate", "namespace", namespace, "name", certificateName)
+		if err := r.Update(ctx, foundCertificate); err != nil {
+			log.Error(err, "unable to update certificate")
+			return err
+		}
+	}
+
+	return nil
+}
+
 
 // Reference: https://github.com/pwittrock/kubebuilder-workshop/blob/master/pkg/util/util.go
 
@@ -196,7 +225,25 @@ func CopyServiceFields(from, to *corev1.Service) bool {
 
 // Copy configuration related fields to another instance and returns true if there
 // is a diff and thus needs to update.
-func CopyVirtualService(from, to *unstructured.Unstructured) bool {
+func CopyIngress(from, to *netv1.Ingress) bool {
+	requireUpdate := false
+
+	// Don't copy the entire Spec, because we can't overwrite the clusterIp field
+
+	if !reflect.DeepEqual(to.Spec.TLS, from.Spec.TLS) {
+		requireUpdate = true
+	}
+	to.Spec.TLS = from.Spec.TLS
+
+	if !reflect.DeepEqual(to.Spec.Rules, from.Spec.Rules) {
+		requireUpdate = true
+	}
+	to.Spec.Rules = from.Spec.Rules
+
+	return requireUpdate
+}
+
+func CopyCertificate(from, to *unstructured.Unstructured) bool {
 	fromSpec, found, err := unstructured.NestedMap(from.Object, "spec")
 	if !found {
 		return false

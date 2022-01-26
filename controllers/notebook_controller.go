@@ -25,6 +25,9 @@ import (
 	reconcilehelper "github.com/tmax-cloud/notebook-controller-go/pkg/reconcilehelper"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/extensions/v1beta1"
+//	certv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
+//	cmmetav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +47,7 @@ import (
 
 const DefaultContainerPort = 8888
 const DefaultServingPort = 80
+const HttpsServingPort = 443
 const AnnotationRewriteURI = "notebooks.kubeflow.org/http-rewrite-uri"
 const AnnotationHeadersRequestSet = "notebooks.kubeflow.org/http-headers-request-set"
 
@@ -84,7 +88,7 @@ type NotebookReconciler struct {
 func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
 	log := r.Log.WithValues("notebook", req.NamespacedName)
-
+	 
 	// TODO(yanniszark): Can we avoid reconciling Events and Notebook in the same queue?
 	event := &corev1.Event{}
 	var getEventErr error
@@ -198,8 +202,13 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
-	// Reconcile virtual service if we use ISTIO.
-	err = r.reconcileVirtualService(instance)
+	// Reconcile Ingress
+	err = r.reconcileIngress(instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Reconcile Certificate
+	err = r.reconcileCertificate(instance)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -365,10 +374,15 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 				},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
-					"statefulset":   instance.Name,
-					"notebook-name": instance.Name,
-				}},
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"sidecar.istio.io/inject": "false",
+					},
+					Labels: map[string]string{
+						"statefulset":   instance.Name,
+						"notebook-name": instance.Name,
+					},
+				},
 				Spec: instance.Spec.Template.Spec,
 			},
 		},
@@ -381,6 +395,7 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 
 	podSpec := &ss.Spec.Template.Spec
 	container := &podSpec.Containers[0]
+//	volumes := &podSpec.Volumes[0]
 
 	if container.WorkingDir == "" {
 		container.WorkingDir = "/home/jovyan"
@@ -394,12 +409,55 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 				Protocol:      "TCP",
 			},
 		}
-	}
-	container.Env = append(container.Env, corev1.EnvVar{
-		Name:  "NB_PREFIX",
-		Value: "/api/kubeflow/notebook/" + instance.Namespace + "/" + instance.Name,
+	}	
+	
+	clientsecret := os.Getenv("CLIENT_SECRET")
+    discoveryurl := os.Getenv("DISCOVERY_URL")
+			
+	podSpec.Containers = append(podSpec.Containers, corev1.Container{
+		Name:  "gatekeeper",
+		Image: "quay.io/keycloak/keycloak-gatekeeper:10.0.0",
+		Args: []string{
+			"--client-id=notebook-gatekeeper",
+			"--client-secret=" + clientsecret,
+			"--listen=:3000",
+			"--upstream-url=http://127.0.0.1:8888",
+			"--discovery-url=" + discoveryurl,
+			"--secure-cookie=false",
+			"--upstream-keepalives=false",
+			"--skip-openid-provider-tls-verify=true",
+			"--skip-upstream-tls-verify=true",
+			"--enable-self-signed-tls",
+			"--enable-refresh-tokens=true",
+			"--enable-default-deny=true",
+			"--enable-metrics=true",
+			"--encryption-key=AgXa7xRcoClDEU0ZDSH4X0XhL5Qy2Z2j",
+			"--resources=uri=/*|roles=notebook-gatekeeper:notebook-gatekeeper-manager",
+			"--verbose",
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "service",
+				ContainerPort: 3000,
+			},
+		},			
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "secret",
+				MountPath: "/etc/secrets",
+			},
+		},
 	})
 
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: "secret",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: instance.Name + "-secret",
+			},
+		},
+	})
+	
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
 	// This allows for those platforms to bypass the automatic addition of the fsGroup
 	// and will allow for the Pod Security Policy controller to make an appropriate choice
@@ -417,11 +475,11 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 
 func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 	// Define the desired Service object
-	port := DefaultContainerPort
-	containerPorts := instance.Spec.Template.Spec.Containers[0].Ports
+//	port := DefaultContainerPort
+/*	containerPorts := instance.Spec.Template.Spec.Containers[0].Ports
 	if containerPorts != nil {
 		port = int(containerPorts[0].ContainerPort)
-	}
+	}*/
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name,
@@ -433,9 +491,9 @@ func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 			Ports: []corev1.ServicePort{
 				{
 					// Make port name follow Istio pattern so it can be managed by istio rbac
-					Name:       "http-" + instance.Name,
-					Port:       DefaultServingPort,
-					TargetPort: intstr.FromInt(port),
+					Name:       "https-" + instance.Name,
+					Port:       int32(HttpsServingPort),
+					TargetPort: intstr.FromInt(3000),
 					Protocol:   "TCP",
 				},
 			},
@@ -443,90 +501,87 @@ func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 	}
 	return svc
 }
-
-func virtualServiceName(kfName string, namespace string) string {
+func ingressName(kfName string, namespace string) string {
 	return fmt.Sprintf("notebook-%s-%s", namespace, kfName)
 }
 
-func generateVirtualService(instance *kubeflowv1.Notebook) (*unstructured.Unstructured, error) {
+func generateIngress(instance *kubeflowv1.Notebook) (*netv1.Ingress, error) {
 	name := instance.Name
 	namespace := instance.Namespace
-	clusterDomain := "cluster.local"
-	prefix := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
-	rewrite := fmt.Sprintf("/api/kubeflow/notebook/%s/%s/", namespace, name)
-	if clusterDomainFromEnv, ok := os.LookupEnv("CLUSTER_DOMAIN"); ok {
-		clusterDomain = clusterDomainFromEnv
-	}
-	service := fmt.Sprintf("%s.%s.svc.%s", name, namespace, clusterDomain)
+	var tls []netv1.IngressTLS
+	var ingressclassname = new(string)
+	*ingressclassname = "tmax-cloud"
+/*	if redirect.Expose != nil && redirect.Expose.TLS.Enabled() {
+		tls = []netv1.IngressTLS{{
+			SecretName: redirect.Expose.TLS.CertificateRef,
+			Hosts:      []string{redirect.Expose.Ingress.Host},
+		}}
+	}*/
+	customDomain := os.Getenv("CUSTOM_DOMAIN")
 
-	vsvc := &unstructured.Unstructured{}
-	vsvc.SetAPIVersion("networking.istio.io/v1alpha3")
-	vsvc.SetKind("VirtualService")
-	vsvc.SetName(virtualServiceName(name, namespace))
-	vsvc.SetNamespace(namespace)
-	if err := unstructured.SetNestedStringSlice(vsvc.Object, []string{"*"}, "spec", "hosts"); err != nil {
-		return nil, fmt.Errorf("Set .spec.hosts error: %v", err)
-	}
-
-	istioGateway := os.Getenv("ISTIO_GATEWAY")
-	if len(istioGateway) == 0 {
-		istioGateway = "kubeflow/kubeflow-gateway"
-	}
-	if err := unstructured.SetNestedStringSlice(vsvc.Object, []string{istioGateway},
-		"spec", "gateways"); err != nil {
-		return nil, fmt.Errorf("Set .spec.gateways error: %v", err)
-	}
-
-	http := []interface{}{
-		map[string]interface{}{
-			"match": []interface{}{
-				map[string]interface{}{
-					"uri": map[string]interface{}{
-						"prefix": prefix,
-					},
-				},
+	tls = []netv1.IngressTLS{{		
+		Hosts:      []string{instance.Name + "." + customDomain},
+	}}
+	
+	pathTypePrefix := netv1.PathTypePrefix
+	
+	ingress := &netv1.Ingress{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Ingress",
+			APIVersion: "networking.k8s.io/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ingressName(name, namespace),
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"traefik.ingress.kubernetes.io/router.entrypoints": "websecure",
+				"cert-manager.io/cluster-issuer": "tmaxcloud-issuer",
 			},
-			"rewrite": map[string]interface{}{
-				"uri": rewrite,
+			Labels: map[string]string{
+				"ingress.tmaxcloud.org/name":   instance.Name,				
 			},
-			"route": []interface{}{
-				map[string]interface{}{
-					"destination": map[string]interface{}{
-						"host": service,
-						"port": map[string]interface{}{
-							"number": int64(DefaultServingPort),
+		},
+		Spec: netv1.IngressSpec{
+			TLS:              tls,
+			IngressClassName: ingressclassname,
+			Rules: []netv1.IngressRule{
+				{
+					Host: instance.Name + "." + customDomain,
+					IngressRuleValue: netv1.IngressRuleValue{
+						HTTP: &netv1.HTTPIngressRuleValue{
+							Paths: []netv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathTypePrefix,
+									Backend: netv1.IngressBackend{
+										ServiceName: instance.Name,
+										ServicePort: intstr.FromInt(int(HttpsServingPort)),
+									},
+								},
+							},
 						},
 					},
 				},
 			},
-			"timeout": "300s",
 		},
 	}
-	if err := unstructured.SetNestedSlice(vsvc.Object, http, "spec", "http"); err != nil {
-		return nil, fmt.Errorf("Set .spec.http error: %v", err)
-	}
-
-	return vsvc, nil
-
+	return ingress, nil
 }
 
-func (r *NotebookReconciler) reconcileVirtualService(instance *kubeflowv1.Notebook) error {
+func (r *NotebookReconciler) reconcileIngress(instance *kubeflowv1.Notebook) error {	
 	log := r.Log.WithValues("notebook", instance.Namespace)
-	virtualService, err := generateVirtualService(instance)
-	if err := ctrl.SetControllerReference(instance, virtualService, r.Scheme); err != nil {
+	ingress, err := generateIngress(instance)
+	if err := ctrl.SetControllerReference(instance, ingress, r.Scheme); err != nil {
 		return err
 	}
-	// Check if the virtual service already exists.
-	foundVirtual := &unstructured.Unstructured{}
-	justCreated := false
-	foundVirtual.SetAPIVersion("networking.istio.io/v1alpha3")
-	foundVirtual.SetKind("VirtualService")
-	err = r.Get(context.TODO(), types.NamespacedName{Name: virtualServiceName(instance.Name,
-		instance.Namespace), Namespace: instance.Namespace}, foundVirtual)
+	// ingress 존재 체크
+	foundIngress := &netv1.Ingress{}
+	justCreated := false	
+	err = r.Get(context.TODO(), types.NamespacedName{Name: ingressName(instance.Name,
+		instance.Namespace), Namespace: instance.Namespace}, foundIngress)
 	if err != nil && apierrs.IsNotFound(err) {
-		log.Info("Creating virtual service", "namespace", instance.Namespace, "name",
-			virtualServiceName(instance.Name, instance.Namespace))
-		err = r.Create(context.TODO(), virtualService)
+		log.Info("Creating Ingress", "namespace", ingress.Namespace, "name", ingressName(instance.Name, instance.Namespace))
+		err = r.Create(context.TODO(), ingress)
 		justCreated = true
 		if err != nil {
 			return err
@@ -535,10 +590,9 @@ func (r *NotebookReconciler) reconcileVirtualService(instance *kubeflowv1.Notebo
 		return err
 	}
 
-	if !justCreated && reconcilehelper.CopyVirtualService(virtualService, foundVirtual) {
-		log.Info("Updating virtual service", "namespace", instance.Namespace, "name",
-			virtualServiceName(instance.Name, instance.Namespace))
-		err = r.Update(context.TODO(), foundVirtual)
+	if !justCreated && reconcilehelper.CopyIngress(ingress, foundIngress) {
+		log.Info("Updating Ingress\n", "namespace", ingress.Namespace, "name", ingressName(instance.Name, instance.Namespace))
+		err = r.Update(context.TODO(), foundIngress)
 		if err != nil {
 			return err
 		}
@@ -547,6 +601,90 @@ func (r *NotebookReconciler) reconcileVirtualService(instance *kubeflowv1.Notebo
 	return nil
 }
 
+func certificateName(kfName string, namespace string) string {
+	return fmt.Sprintf("cert-%s-%s", namespace, kfName)
+}
+
+func generateCertificate(instance *kubeflowv1.Notebook) (*unstructured.Unstructured, error) {
+	name := instance.Name
+	namespace := instance.Namespace
+	cert := &unstructured.Unstructured{}
+	cert.SetAPIVersion("cert-manager.io/v1")
+	cert.SetKind("Certificate")
+	cert.SetName(certificateName(name, namespace))
+	cert.SetNamespace(namespace)
+	
+	secretname := fmt.Sprintf("%s-secret", name)
+	if err := unstructured.SetNestedField(cert.Object, secretname, "spec", "secretName"); err != nil {
+		return nil, fmt.Errorf("Set .spec.secretName error: %v", err)
+	}
+	var isca bool = false
+	if err := unstructured.SetNestedField(cert.Object, isca, "spec", "isCA"); err != nil {
+		return nil, fmt.Errorf("Set .spec.isCA error: %v", err)
+	}
+	dnsnames := []string{
+		"tmax-cloud",
+	}
+	if err := unstructured.SetNestedStringSlice(cert.Object, dnsnames, "spec", "dnsNames"); err != nil {
+		return nil, fmt.Errorf("Set .spec.dnsNames error: %v", err)
+	}
+	keyusage := []string{
+		"digital signature",
+		"key encipherment",
+		"server auth",
+		"client auth",
+	}
+	if err := unstructured.SetNestedStringSlice(cert.Object, keyusage, "spec", "usages"); err != nil {
+		return nil, fmt.Errorf("Set .spec.usages error: %v", err)
+	}
+
+	issuerref := map[string]string{
+		"group": "cert-manager.io",
+		"kind": "ClusterIssuer",
+		"name": "tmaxcloud-issuer",
+	}
+	
+	if err := unstructured.SetNestedStringMap(cert.Object, issuerref, "spec", "issuerRef"); err != nil {
+		return nil, fmt.Errorf("Set .spec.issuerref error: %v", err)
+	}	
+
+	return cert, nil
+}
+
+func (r *NotebookReconciler) reconcileCertificate(instance *kubeflowv1.Notebook) error {	
+	log := r.Log.WithValues("notebook", instance.Namespace)
+	certificate, err := generateCertificate(instance)
+	if err := ctrl.SetControllerReference(instance, certificate, r.Scheme); err != nil {
+		return err
+	}
+	// certificate 존재 체크
+	foundCertificate := &unstructured.Unstructured{}
+	justCreated := false
+	foundCertificate.SetAPIVersion("cert-manager.io/v1")
+	foundCertificate.SetKind("Certificate")	
+	err = r.Get(context.TODO(), types.NamespacedName{Name: certificateName(instance.Name,
+		instance.Namespace), Namespace: instance.Namespace}, foundCertificate)
+	if err != nil && apierrs.IsNotFound(err) {
+		log.Info("Creating Certificate", "namespace", instance.Namespace, "name", certificateName(instance.Name, instance.Namespace))
+		err = r.Create(context.TODO(), certificate)
+		justCreated = true
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+
+	if !justCreated && reconcilehelper.CopyCertificate(certificate, foundCertificate) {
+		log.Info("Updating Certificate\n", "namespace", instance.Namespace, "name", certificateName(instance.Name, instance.Namespace))
+		err = r.Update(context.TODO(), foundCertificate)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 func isStsOrPodEvent(event *corev1.Event) bool {
 	return event.InvolvedObject.Kind == "Pod" || event.InvolvedObject.Kind == "StatefulSet"
 }
@@ -590,12 +728,15 @@ func (r *NotebookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&kubeflowv1.Notebook{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{})
-	// watch Istio virtual service
-	virtualService := &unstructured.Unstructured{}
-	virtualService.SetAPIVersion("networking.istio.io/v1alpha3")
-	virtualService.SetKind("VirtualService")
-	builder.Owns(virtualService)
-
+	// watch Ingress
+	ingress := &netv1.Ingress{}	
+	builder.Owns(ingress)
+	// watch Certificate
+	certificate := &unstructured.Unstructured{}
+	certificate.SetAPIVersion("cert-manager.io/v1")
+	certificate.SetKind("Certificate")
+	builder.Owns(certificate)
+	
 	c, err := builder.Build(r)
 	if err != nil {
 		return err
