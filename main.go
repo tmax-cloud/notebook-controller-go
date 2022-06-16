@@ -1,5 +1,4 @@
 /*
-Copyright 2021.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -31,7 +30,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	kubeflowv1 "github.com/tmax-cloud/notebook-controller-go/api/v1"
+	nbv1 "github.com/tmax-cloud/notebook-controller-go/api/v1"
+	nbv1alpha1 "github.com/tmax-cloud/notebook-controller-go/api/v1alpha1"
+	nbv1beta1 "github.com/tmax-cloud/notebook-controller-go/api/v1beta1"
 	"github.com/tmax-cloud/notebook-controller-go/controllers"
 	controller_metrics "github.com/tmax-cloud/notebook-controller-go/pkg/metrics"
 	//+kubebuilder:scaffold:imports
@@ -44,34 +45,49 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(kubeflowv1.AddToScheme(scheme))
+
+	utilruntime.Must(nbv1.AddToScheme(scheme))
+	utilruntime.Must(nbv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(nbv1beta1.AddToScheme(scheme))
+
 	//+kubebuilder:scaffold:scheme
 }
 
 func main() {
-	var metricsAddr string
+	var metricsAddr, leaderElectionNamespace string
 	var enableLeaderElection bool
 	var probeAddr string
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
-		"Enable leader election for controller manager. "+
-			"Enabling this will ensure there is only one active controller manager.")
+	var Burst int
+	var QPS int
+	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&probeAddr, "probe-addr", ":8081", "The address the health endpoint binds to.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
+		"Determines the namespace in which the leader election configmap will be created.")
+	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
+		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
+	flag.IntVar(&Burst, "burst", 0, "If it's zero, the created RESTClient will use DefaultBurst")
+	flag.IntVar(&QPS, "qps", 0, "If it's zero, the created RESTClient will use DefaultQPS")
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	cfg := ctrl.GetConfigOrDie()
+	if Burst != 0 {
+		cfg.Burst = Burst
+	}
+	if QPS != 0 {
+		cfg.QPS = float32(QPS)
+	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		MetricsBindAddress:     metricsAddr,
-		Port:                   9443,
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "0432b6d8.tmax.io",
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:                  scheme,
+		MetricsBindAddress:      metricsAddr,
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionNamespace: leaderElectionNamespace,
+		LeaderElectionID:        "kubeflow-notebook-controller",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -88,16 +104,24 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Notebook")
 		os.Exit(1)
 	}
-	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
+
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
+
+	// uncomment when we need the conversion webhook.
+	// if err = (&nbv1beta1.Notebook{}).SetupWebhookWithManager(mgr); err != nil {
+	// 	setupLog.Error(err, "unable to create webhook", "webhook", "Captain")
+	// 	os.Exit(1)
+	// }
+
+	//+kubebuilder:scaffold:builder
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

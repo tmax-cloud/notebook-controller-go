@@ -1,8 +1,11 @@
 /*
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
+
     http://www.apache.org/licenses/LICENSE-2.0
+
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,22 +17,21 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/go-logr/logr"
-	kubeflowv1 "github.com/tmax-cloud/notebook-controller-go/api/v1"
+	reconcilehelper "github.com/tmax-cloud/notebook-controller-go/pkg/reconcilehelper"
+	"github.com/tmax-cloud/notebook-controller-go/api/v1"	
 	"github.com/tmax-cloud/notebook-controller-go/pkg/culler"
 	"github.com/tmax-cloud/notebook-controller-go/pkg/metrics"
-	reconcilehelper "github.com/tmax-cloud/notebook-controller-go/pkg/reconcilehelper"
+	"k8s.io/apimachinery/pkg/api/resource"
+	netv1 "k8s.io/api/networking/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	netv1 "k8s.io/api/extensions/v1beta1"
-//	certv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-//	cmmetav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -50,6 +53,8 @@ const DefaultServingPort = 80
 const HttpsServingPort = 443
 const AnnotationRewriteURI = "notebooks.kubeflow.org/http-rewrite-uri"
 const AnnotationHeadersRequestSet = "notebooks.kubeflow.org/http-headers-request-set"
+
+const PrefixEnvVar = "NB_PREFIX"
 
 // The default fsGroup of PodSecurityContext.
 // https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.11/#podsecuritycontext-v1-core
@@ -76,49 +81,54 @@ type NotebookReconciler struct {
 	EventRecorder record.EventRecorder
 }
 
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=statefulsets/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=services/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=tmax.io,resources=notebooks,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=tmax.io,resources=notebooks/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=core,resources=services,verbs="*"
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs="*"
+// +kubebuilder:rbac:groups=kubeflow.org,resources=notebooks;notebooks/status;notebooks/finalizers,verbs="*"
+// +kubebuilder:rbac:groups="networking.istio.io",resources=virtualservices,verbs="*"
 
-func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
+func (r *NotebookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("notebook", req.NamespacedName)
-	 
+
 	// TODO(yanniszark): Can we avoid reconciling Events and Notebook in the same queue?
 	event := &corev1.Event{}
 	var getEventErr error
 	getEventErr = r.Get(ctx, req.NamespacedName, event)
 	if getEventErr == nil {
-		involvedNotebook := &kubeflowv1.Notebook{}
+		log.Info("Found event for Notebook. Re-emitting...")
+
+		// Find the Notebook that corresponds to the triggered event
+		involvedNotebook := &v1.Notebook{}
 		nbName, err := nbNameFromInvolvedObject(r.Client, &event.InvolvedObject)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+
 		involvedNotebookKey := types.NamespacedName{Name: nbName, Namespace: req.Namespace}
 		if err := r.Get(ctx, involvedNotebookKey, involvedNotebook); err != nil {
 			log.Error(err, "unable to fetch Notebook by looking at event")
 			return ctrl.Result{}, ignoreNotFound(err)
 		}
+
+		// re-emit the event in the Notebook CR
+		log.Info("Emitting Notebook Event.", "Event", event)
 		r.EventRecorder.Eventf(involvedNotebook, event.Type, event.Reason,
 			"Reissued from %s/%s: %s", strings.ToLower(event.InvolvedObject.Kind), event.InvolvedObject.Name, event.Message)
+		return ctrl.Result{}, nil
 	}
+
 	if getEventErr != nil && !apierrs.IsNotFound(getEventErr) {
 		return ctrl.Result{}, getEventErr
 	}
 	// If not found, continue. Is not an event.
 
-	instance := &kubeflowv1.Notebook{}
+	instance := &v1.Notebook{}
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
 		log.Error(err, "unable to fetch Notebook")
 		return ctrl.Result{}, ignoreNotFound(err)
 	}
 
-	// Create PersistentVolumeClaim
 	pvc := generatePersistentVolumeClaim(instance)
 
 	// Check if the PersistentVolumeClaim already exists
@@ -202,15 +212,24 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
-	// Reconcile Ingress
+	// Reconcile Ingress.
 	err = r.reconcileIngress(instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	// Reconcile Certificate
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+	// Reconcile Certificate.
 	err = r.reconcileCertificate(instance)
 	if err != nil {
 		return ctrl.Result{}, err
+	}	
+
+	// Reconcile virtual service if we use ISTIO.
+	if os.Getenv("USE_ISTIO") == "true" {
+		err = r.reconcileVirtualService(instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Update the readyReplicas if the status is changed
@@ -235,6 +254,7 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	} else {
 		// Got the pod
 		podFound = true
+
 		if len(pod.Status.ContainerStatuses) > 0 &&
 			pod.Status.ContainerStatuses[0].State != instance.Status.ContainerState {
 			log.Info("Updating container state: ", "namespace", instance.Namespace, "name", instance.Name)
@@ -247,17 +267,48 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 				oldConditions[0].Reason != newCondition.Reason ||
 				oldConditions[0].Message != newCondition.Message {
 				log.Info("Appending to conditions: ", "namespace", instance.Namespace, "name", instance.Name, "type", newCondition.Type, "reason", newCondition.Reason, "message", newCondition.Message)
-				instance.Status.Conditions = append([]kubeflowv1.NotebookCondition{newCondition}, oldConditions...)
+				instance.Status.Conditions = append([]v1.NotebookCondition{newCondition}, oldConditions...)
+
 			}
 			err = r.Status().Update(ctx, instance)
 			if err != nil {
-				return ctrl.Result{}, err
+				return ctrl.Result{}, err			
 			}
 		}
 	}
 
+	if !podFound {
+		// Delete LAST_ACTIVITY_ANNOTATION annotations for CR objects
+		// that do not have a pod.
+		log.Info("Notebook has not Pod running. Will remove last-activity annotation")
+		meta := instance.ObjectMeta
+		if meta.GetAnnotations() == nil {
+			log.Info("No annotations found")
+			return ctrl.Result{}, nil
+		}
+
+		if _, ok := meta.GetAnnotations()[culler.LAST_ACTIVITY_ANNOTATION]; !ok {
+			log.Info("No last-activity annotations found")
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Removing last-activity annotation")
+		delete(meta.GetAnnotations(), culler.LAST_ACTIVITY_ANNOTATION)
+		err = r.Update(ctx, instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+
+	}
+
+	// Pod is found
 	// Check if the Notebook needs to be stopped
-	if podFound && culler.NotebookNeedsCulling(instance.ObjectMeta) {
+	// Update the LAST_ACTIVIiANNOTATION
+	
+
+	// Check if the Notebook needs to be stopped
+	if culler.NotebookNeedsCulling(instance.ObjectMeta) {
 		log.Info(fmt.Sprintf(
 			"Notebook %s/%s needs culling. Setting annotations",
 			instance.Namespace, instance.Name))
@@ -269,17 +320,16 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-	} else if podFound && !culler.StopAnnotationIsSet(instance.ObjectMeta) {
+	} else if !culler.StopAnnotationIsSet(instance.ObjectMeta) {
 		// The Pod is either too fresh, or the idle time has passed and it has
 		// received traffic. In this case we will be periodically checking if
 		// it needs culling.
 		return ctrl.Result{RequeueAfter: culler.GetRequeueTime()}, nil
 	}
-
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: culler.GetRequeueTime()}, nil
 }
 
-func getNextCondition(cs corev1.ContainerState) kubeflowv1.NotebookCondition {
+func getNextCondition(cs corev1.ContainerState) v1.NotebookCondition {
 	var nbtype = ""
 	var nbreason = ""
 	var nbmsg = ""
@@ -296,7 +346,7 @@ func getNextCondition(cs corev1.ContainerState) kubeflowv1.NotebookCondition {
 		nbmsg = cs.Terminated.Reason
 	}
 
-	newCondition := kubeflowv1.NotebookCondition{
+	newCondition := v1.NotebookCondition{
 		Type:          nbtype,
 		LastProbeTime: metav1.Now(),
 		Reason:        nbreason,
@@ -305,7 +355,23 @@ func getNextCondition(cs corev1.ContainerState) kubeflowv1.NotebookCondition {
 	return newCondition
 }
 
-func generatePersistentVolumeClaim(instance *kubeflowv1.Notebook) *corev1.PersistentVolumeClaim {
+func setPrefixEnvVar(instance *v1.Notebook, container *corev1.Container) {
+	prefix := "/notebook/" + instance.Namespace + "/" + instance.Name
+
+	for _, envVar := range container.Env {
+		if envVar.Name == PrefixEnvVar {
+			envVar.Value = prefix
+			return
+		}
+	}
+
+	container.Env = append(container.Env, corev1.EnvVar{
+		Name:  PrefixEnvVar,
+		Value: prefix,
+	})
+}
+
+func generatePersistentVolumeClaim(instance *v1.Notebook) *corev1.PersistentVolumeClaim {
 	storageclass := instance.Spec.VolumeClaim[0].StorageClass
 	pvc := &corev1.PersistentVolumeClaim{}
 
@@ -355,7 +421,7 @@ func generatePersistentVolumeClaim(instance *kubeflowv1.Notebook) *corev1.Persis
 	return pvc
 }
 
-func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
+func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 	replicas := int32(1)
 	if culler.StopAnnotationIsSet(instance.ObjectMeta) {
 		replicas = 0
@@ -374,16 +440,14 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 				},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Annotations: map[string]string{
-						"sidecar.istio.io/inject": "false",
-					},
-					Labels: map[string]string{
-						"statefulset":   instance.Name,
-						"notebook-name": instance.Name,
-					},
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+					"sidecar.istio.io/inject": "false",
 				},
-				Spec: instance.Spec.Template.Spec,
+				Labels: map[string]string{
+					"statefulset":   instance.Name,
+					"notebook-name": instance.Name,
+				}},
+				Spec: *instance.Spec.Template.Spec.DeepCopy(),
 			},
 		},
 	}
@@ -395,12 +459,9 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 
 	podSpec := &ss.Spec.Template.Spec
 	container := &podSpec.Containers[0]
-//	volumes := &podSpec.Volumes[0]
-
 	if container.WorkingDir == "" {
 		container.WorkingDir = "/home/jovyan"
 	}
-
 	if container.Ports == nil {
 		container.Ports = []corev1.ContainerPort{
 			{
@@ -409,8 +470,8 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 				Protocol:      "TCP",
 			},
 		}
-	}	
-	
+	}
+
 	clientsecret := os.Getenv("CLIENT_SECRET")
     discoveryurl := os.Getenv("DISCOVERY_URL")
 			
@@ -457,7 +518,9 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 			},
 		},
 	})
-	
+
+	setPrefixEnvVar(instance, container)
+
 	// For some platforms (like OpenShift), adding fsGroup: 100 is troublesome.
 	// This allows for those platforms to bypass the automatic addition of the fsGroup
 	// and will allow for the Pod Security Policy controller to make an appropriate choice
@@ -473,7 +536,7 @@ func generateStatefulSet(instance *kubeflowv1.Notebook) *appsv1.StatefulSet {
 	return ss
 }
 
-func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
+func generateService(instance *v1.Notebook) *corev1.Service {
 	// Define the desired Service object
 //	port := DefaultContainerPort
 /*	containerPorts := instance.Spec.Template.Spec.Containers[0].Ports
@@ -501,11 +564,12 @@ func generateService(instance *kubeflowv1.Notebook) *corev1.Service {
 	}
 	return svc
 }
+
 func ingressName(kfName string, namespace string) string {
 	return fmt.Sprintf("notebook-%s-%s", namespace, kfName)
 }
 
-func generateIngress(instance *kubeflowv1.Notebook) (*netv1.Ingress, error) {
+func generateIngress(instance *v1.Notebook) (*netv1.Ingress, error) {
 	name := instance.Name
 	namespace := instance.Namespace
 	var tls []netv1.IngressTLS
@@ -554,8 +618,12 @@ func generateIngress(instance *kubeflowv1.Notebook) (*netv1.Ingress, error) {
 									Path:     "/",
 									PathType: &pathTypePrefix,
 									Backend: netv1.IngressBackend{
-										ServiceName: instance.Name,
-										ServicePort: intstr.FromInt(int(HttpsServingPort)),
+										Service: &netv1.IngressServiceBackend{
+											Name: instance.Name,
+											Port: netv1.ServiceBackendPort{
+												Number: int32(443),
+											},
+										},
 									},
 								},
 							},
@@ -568,7 +636,7 @@ func generateIngress(instance *kubeflowv1.Notebook) (*netv1.Ingress, error) {
 	return ingress, nil
 }
 
-func (r *NotebookReconciler) reconcileIngress(instance *kubeflowv1.Notebook) error {	
+func (r *NotebookReconciler) reconcileIngress(instance *v1.Notebook) error {	
 	log := r.Log.WithValues("notebook", instance.Namespace)
 	ingress, err := generateIngress(instance)
 	if err := ctrl.SetControllerReference(instance, ingress, r.Scheme); err != nil {
@@ -605,7 +673,7 @@ func certificateName(kfName string, namespace string) string {
 	return fmt.Sprintf("cert-%s-%s", namespace, kfName)
 }
 
-func generateCertificate(instance *kubeflowv1.Notebook) (*unstructured.Unstructured, error) {
+func generateCertificate(instance *v1.Notebook) (*unstructured.Unstructured, error) {
 	name := instance.Name
 	namespace := instance.Namespace
 	cert := &unstructured.Unstructured{}
@@ -651,7 +719,7 @@ func generateCertificate(instance *kubeflowv1.Notebook) (*unstructured.Unstructu
 	return cert, nil
 }
 
-func (r *NotebookReconciler) reconcileCertificate(instance *kubeflowv1.Notebook) error {	
+func (r *NotebookReconciler) reconcileCertificate(instance *v1.Notebook) error {	
 	log := r.Log.WithValues("notebook", instance.Namespace)
 	certificate, err := generateCertificate(instance)
 	if err := ctrl.SetControllerReference(instance, certificate, r.Scheme); err != nil {
@@ -685,6 +753,144 @@ func (r *NotebookReconciler) reconcileCertificate(instance *kubeflowv1.Notebook)
 
 	return nil
 }
+
+func virtualServiceName(kfName string, namespace string) string {
+	return fmt.Sprintf("notebook-%s-%s", namespace, kfName)
+}
+
+func generateVirtualService(instance *v1.Notebook) (*unstructured.Unstructured, error) {
+	name := instance.Name
+	namespace := instance.Namespace
+	clusterDomain := "cluster.local"
+	prefix := fmt.Sprintf("/notebook/%s/%s/", namespace, name)
+
+	// unpack annotations from Notebook resource
+	annotations := make(map[string]string)
+	for k, v := range instance.ObjectMeta.Annotations {
+		annotations[k] = v
+	}
+
+	rewrite := fmt.Sprintf("/notebook/%s/%s/", namespace, name)
+	// If AnnotationRewriteURI is present, use this value for "rewrite"
+	if _, ok := annotations[AnnotationRewriteURI]; ok && len(annotations[AnnotationRewriteURI]) > 0 {
+		rewrite = annotations[AnnotationRewriteURI]
+	}
+
+	if clusterDomainFromEnv, ok := os.LookupEnv("CLUSTER_DOMAIN"); ok {
+		clusterDomain = clusterDomainFromEnv
+	}
+	service := fmt.Sprintf("%s.%s.svc.%s", name, namespace, clusterDomain)
+
+	vsvc := &unstructured.Unstructured{}
+	vsvc.SetAPIVersion("networking.istio.io/v1alpha3")
+	vsvc.SetKind("VirtualService")
+	vsvc.SetName(virtualServiceName(name, namespace))
+	vsvc.SetNamespace(namespace)
+	if err := unstructured.SetNestedStringSlice(vsvc.Object, []string{"*"}, "spec", "hosts"); err != nil {
+		return nil, fmt.Errorf("Set .spec.hosts error: %v", err)
+	}
+
+	istioGateway := os.Getenv("ISTIO_GATEWAY")
+	if len(istioGateway) == 0 {
+		istioGateway = "kubeflow/kubeflow-gateway"
+	}
+	if err := unstructured.SetNestedStringSlice(vsvc.Object, []string{istioGateway},
+		"spec", "gateways"); err != nil {
+		return nil, fmt.Errorf("Set .spec.gateways error: %v", err)
+	}
+
+	headersRequestSet := make(map[string]string)
+	// If AnnotationHeadersRequestSet is present, use its values in "headers.request.set"
+	if _, ok := annotations[AnnotationHeadersRequestSet]; ok && len(annotations[AnnotationHeadersRequestSet]) > 0 {
+		requestHeadersBytes := []byte(annotations[AnnotationHeadersRequestSet])
+		if err := json.Unmarshal(requestHeadersBytes, &headersRequestSet); err != nil {
+			// if JSON decoding fails, set an empty map
+			headersRequestSet = make(map[string]string)
+		}
+	}
+	// cast from map[string]string, as SetNestedSlice needs map[string]interface{}
+	headersRequestSetInterface := make(map[string]interface{})
+	for key, element := range headersRequestSet {
+		headersRequestSetInterface[key] = element
+	}
+
+	// the http section of the istio VirtualService spec
+	http := []interface{}{
+		map[string]interface{}{
+			"headers": map[string]interface{}{
+				"request": map[string]interface{}{
+					"set": headersRequestSetInterface,
+				},
+			},
+			"match": []interface{}{
+				map[string]interface{}{
+					"uri": map[string]interface{}{
+						"prefix": prefix,
+					},
+				},
+			},
+			"rewrite": map[string]interface{}{
+				"uri": rewrite,
+			},
+			"route": []interface{}{
+				map[string]interface{}{
+					"destination": map[string]interface{}{
+						"host": service,
+						"port": map[string]interface{}{
+							"number": int64(DefaultServingPort),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// add http section to istio VirtualService spec
+	if err := unstructured.SetNestedSlice(vsvc.Object, http, "spec", "http"); err != nil {
+		return nil, fmt.Errorf("Set .spec.http error: %v", err)
+	}
+
+	return vsvc, nil
+
+}
+
+func (r *NotebookReconciler) reconcileVirtualService(instance *v1.Notebook) error {
+	log := r.Log.WithValues("notebook", instance.Namespace)
+	virtualService, err := generateVirtualService(instance)
+	if err := ctrl.SetControllerReference(instance, virtualService, r.Scheme); err != nil {
+		return err
+	}
+	// Check if the virtual service already exists.
+	foundVirtual := &unstructured.Unstructured{}
+	justCreated := false
+	foundVirtual.SetAPIVersion("networking.istio.io/v1alpha3")
+	foundVirtual.SetKind("VirtualService")
+	err = r.Get(context.TODO(), types.NamespacedName{Name: virtualServiceName(instance.Name,
+		instance.Namespace), Namespace: instance.Namespace}, foundVirtual)
+	if err != nil && apierrs.IsNotFound(err) {
+		log.Info("Creating virtual service", "namespace", instance.Namespace, "name",
+			virtualServiceName(instance.Name, instance.Namespace))
+		err = r.Create(context.TODO(), virtualService)
+		justCreated = true
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+
+	if !justCreated && reconcilehelper.CopyVirtualService(virtualService, foundVirtual) {
+		log.Info("Updating virtual service", "namespace", instance.Namespace, "name",
+			virtualServiceName(instance.Name, instance.Namespace))
+		err = r.Update(context.TODO(), foundVirtual)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func isStsOrPodEvent(event *corev1.Event) bool {
 	return event.InvolvedObject.Kind == "Pod" || event.InvolvedObject.Kind == "StatefulSet"
 }
@@ -716,104 +922,107 @@ func nbNameFromInvolvedObject(c client.Client, object *corev1.ObjectReference) (
 }
 
 func nbNameExists(client client.Client, nbName string, namespace string) bool {
-	if err := client.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: nbName}, &kubeflowv1.Notebook{}); err != nil {
+	if err := client.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: nbName}, &v1.Notebook{}); err != nil {
 		// If error != NotFound, trigger the reconcile call anyway to avoid loosing a potential relevant event
 		return !apierrs.IsNotFound(err)
 	}
 	return true
 }
 
+// predNBPodIsLabeled filters pods not containing the "notebook-name" label key
+func predNBPodIsLabeled() predicate.Funcs {
+	// Documented at
+	// https://github.com/kubernetes-sigs/controller-runtime/blob/ce8bdd3d81ab410ff23255e9ad3554f613c5183c/pkg/predicate/predicate_test.go#L884
+	checkNBLabel := func() func(object client.Object) bool {
+		return func(object client.Object) bool {
+			_, labelExists := object.GetLabels()["notebook-name"]
+			return labelExists
+		}
+	}
+
+	return predicate.NewPredicateFuncs(checkNBLabel())
+}
+
+// predNBEvents filters events not coming from Pod or STS, and coming from
+// unknown NBs
+func predNBEvents(r *NotebookReconciler) predicate.Funcs {
+	checkEvent := func() func(object client.Object) bool {
+		return func(object client.Object) bool {
+			event := object.(*corev1.Event)
+			nbName, err := nbNameFromInvolvedObject(r.Client, &event.InvolvedObject)
+			if err != nil {
+				return false
+			}
+			return isStsOrPodEvent(event) && nbNameExists(r.Client, nbName, object.GetNamespace())
+		}
+	}
+
+	predicates := predicate.NewPredicateFuncs(checkEvent())
+
+	// Do not reconcile when an event gets deleted
+	predicates.DeleteFunc = func(e event.DeleteEvent) bool {
+		return false
+	}
+
+	return predicates
+}
+
+// SetupWithManager sets up the controller with the Manager.
 func (r *NotebookReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	builder := ctrl.NewControllerManagedBy(mgr).
-		For(&kubeflowv1.Notebook{}).
-		Owns(&appsv1.StatefulSet{}).
-		Owns(&corev1.Service{})
-	// watch Ingress
-	ingress := &netv1.Ingress{}	
-	builder.Owns(ingress)
+
+	// Map function to convert pod events to reconciliation requests
+	mapPodToRequest := func(object client.Object) []reconcile.Request {
+		return []reconcile.Request{
+			{NamespacedName: types.NamespacedName{
+				Name:      object.GetLabels()["notebook-name"],
+				Namespace: object.GetNamespace(),
+			}},
+		}
+	}
+
+	// Map function to convert namespace events to reconciliation requests
+	mapEventToRequest := func(object client.Object) []reconcile.Request {
+		return []reconcile.Request{
+			{NamespacedName: types.NamespacedName{
+				Name:      object.GetName(),
+				Namespace: object.GetNamespace(),
+			}},
+		}
+	}
+
+	
 	// watch Certificate
 	certificate := &unstructured.Unstructured{}
 	certificate.SetAPIVersion("cert-manager.io/v1")
 	certificate.SetKind("Certificate")
-	builder.Owns(certificate)
 	
-	c, err := builder.Build(r)
+
+	builder := ctrl.NewControllerManagedBy(mgr).
+		For(&v1.Notebook{}).
+		Owns(&appsv1.StatefulSet{}).
+		Owns(&corev1.Service{}).
+		Owns(&netv1.Ingress{}).
+		Owns(certificate).
+		Watches(
+			&source.Kind{Type: &corev1.Pod{}},
+			handler.EnqueueRequestsFromMapFunc(mapPodToRequest),
+			builder.WithPredicates(predNBPodIsLabeled())).
+		Watches(
+			&source.Kind{Type: &corev1.Event{}},
+			handler.EnqueueRequestsFromMapFunc(mapEventToRequest),
+			builder.WithPredicates(predNBEvents(r)))
+	// watch Istio virtual service
+	if os.Getenv("USE_ISTIO") == "true" {
+		virtualService := &unstructured.Unstructured{}
+		virtualService.SetAPIVersion("networking.istio.io/v1alpha3")
+		virtualService.SetKind("VirtualService")
+		builder.Owns(virtualService)
+	}
+	
+	
+
+	err := builder.Complete(r)
 	if err != nil {
-		return err
-	}
-
-	// watch underlying pod
-	mapFn := handler.ToRequestsFunc(
-		func(a handler.MapObject) []ctrl.Request {
-			return []ctrl.Request{
-				{NamespacedName: types.NamespacedName{
-					Name:      a.Meta.GetLabels()["notebook-name"],
-					Namespace: a.Meta.GetNamespace(),
-				}},
-			}
-		})
-	p := predicate.Funcs{
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			if _, ok := e.MetaOld.GetLabels()["notebook-name"]; !ok {
-				return false
-			}
-			return e.ObjectOld != e.ObjectNew
-		},
-		CreateFunc: func(e event.CreateEvent) bool {
-			if _, ok := e.Meta.GetLabels()["notebook-name"]; !ok {
-				return false
-			}
-			return true
-		},
-	}
-
-	eventToRequest := handler.ToRequestsFunc(
-		func(a handler.MapObject) []ctrl.Request {
-			return []reconcile.Request{
-				{NamespacedName: types.NamespacedName{
-					Name:      a.Meta.GetName(),
-					Namespace: a.Meta.GetNamespace(),
-				}},
-			}
-		})
-
-	eventsPredicates := predicate.Funcs{
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			event := e.ObjectNew.(*corev1.Event)
-			nbName, err := nbNameFromInvolvedObject(r.Client, &event.InvolvedObject)
-			if err != nil {
-				return false
-			}
-			return e.ObjectOld != e.ObjectNew &&
-				isStsOrPodEvent(event) &&
-				nbNameExists(r.Client, nbName, e.MetaNew.GetNamespace())
-		},
-		CreateFunc: func(e event.CreateEvent) bool {
-			event := e.Object.(*corev1.Event)
-			nbName, err := nbNameFromInvolvedObject(r.Client, &event.InvolvedObject)
-			if err != nil {
-				return false
-			}
-			return isStsOrPodEvent(event) &&
-				nbNameExists(r.Client, nbName, e.Meta.GetNamespace())
-		},
-	}
-
-	if err = c.Watch(
-		&source.Kind{Type: &corev1.Pod{}},
-		&handler.EnqueueRequestsFromMapFunc{
-			ToRequests: mapFn,
-		},
-		p); err != nil {
-		return err
-	}
-
-	if err = c.Watch(
-		&source.Kind{Type: &corev1.Event{}},
-		&handler.EnqueueRequestsFromMapFunc{
-			ToRequests: eventToRequest,
-		},
-		eventsPredicates); err != nil {
 		return err
 	}
 

@@ -1,8 +1,6 @@
 domain: tmax.io
-layout: go.kubebuilder.io/v3
-plugins:
-  manifests.sdk.operatorframework.io/v2: {}
-  scorecard.sdk.operatorframework.io/v2: {}
+layout:
+- go.kubebuilder.io/v3
 projectName: notebook-controller
 repo: github.com/tmax-cloud/notebook-controller-go
 resources:
@@ -11,8 +9,21 @@ resources:
     namespaced: true
   controller: true
   domain: tmax.io
-  group: kubeflow
   kind: Notebook
   path: github.com/tmax-cloud/notebook-controller-go/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: tmax.io
+  kind: Notebook
+  path: github.com/tmax-cloud/notebook-controller-go/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: tmax.io
+  kind: Notebook
+  path: github.com/tmax-cloud/notebook-controller-go/api/v1beta1
+  version: v1beta1
 version: "3"

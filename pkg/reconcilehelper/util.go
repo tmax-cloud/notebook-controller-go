@@ -1,4 +1,4 @@
-package reconcilehelper
+package reconcile
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	netv1 "k8s.io/api/extensions/v1beta1"
+	netv1 "k8s.io/api/networking/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -71,7 +71,6 @@ func Service(ctx context.Context, r client.Client, service *corev1.Service, log 
 	return nil
 }
 
-
 func Ingress(ctx context.Context, r client.Client, ingressName, namespace string, ingress *netv1.Ingress, log logr.Logger) error {
 	foundIngress := &netv1.Ingress{}
 	justCreated := false	
@@ -128,6 +127,35 @@ func Certificate(ctx context.Context, r client.Client, certificateName, namespac
 	return nil
 }
 
+// VirtualService reconciles an Istio virtual service object.
+func VirtualService(ctx context.Context, r client.Client, virtualServiceName, namespace string, virtualservice *unstructured.Unstructured, log logr.Logger) error {
+	foundVirtualService := &unstructured.Unstructured{}
+	foundVirtualService.SetAPIVersion("networking.istio.io/v1alpha3")
+	foundVirtualService.SetKind("VirtualService")
+	justCreated := false
+	if err := r.Get(ctx, types.NamespacedName{Name: virtualServiceName, Namespace: namespace}, foundVirtualService); err != nil {
+		if apierrs.IsNotFound(err) {
+			log.Info("Creating virtual service", "namespace", namespace, "name", virtualServiceName)
+			if err := r.Create(ctx, virtualservice); err != nil {
+				log.Error(err, "unable to create virtual service")
+				return err
+			}
+			justCreated = true
+		} else {
+			log.Error(err, "error getting virtual service")
+			return err
+		}
+	}
+	if !justCreated && CopyVirtualService(virtualservice, foundVirtualService) {
+		log.Info("Updating virtual service", "namespace", namespace, "name", virtualServiceName)
+		if err := r.Update(ctx, foundVirtualService); err != nil {
+			log.Error(err, "unable to update virtual service")
+			return err
+		}
+	}
+
+	return nil
+}
 
 // Reference: https://github.com/pwittrock/kubebuilder-workshop/blob/master/pkg/util/util.go
 
@@ -149,8 +177,8 @@ func CopyStatefulSetFields(from, to *appsv1.StatefulSet) bool {
 	}
 	to.Annotations = from.Annotations
 
-	if from.Spec.Replicas != to.Spec.Replicas {
-		to.Spec.Replicas = from.Spec.Replicas
+	if *from.Spec.Replicas != *to.Spec.Replicas {
+		*to.Spec.Replicas = *from.Spec.Replicas
 		requireUpdate = true
 	}
 
@@ -223,8 +251,6 @@ func CopyServiceFields(from, to *corev1.Service) bool {
 	return requireUpdate
 }
 
-// Copy configuration related fields to another instance and returns true if there
-// is a diff and thus needs to update.
 func CopyIngress(from, to *netv1.Ingress) bool {
 	requireUpdate := false
 
@@ -244,6 +270,30 @@ func CopyIngress(from, to *netv1.Ingress) bool {
 }
 
 func CopyCertificate(from, to *unstructured.Unstructured) bool {
+	fromSpec, found, err := unstructured.NestedMap(from.Object, "spec")
+	if !found {
+		return false
+	}
+	if err != nil {
+		return false
+	}
+
+	toSpec, found, err := unstructured.NestedMap(to.Object, "spec")
+	if !found || err != nil {
+		unstructured.SetNestedMap(to.Object, fromSpec, "spec")
+		return true
+	}
+
+	requiresUpdate := !reflect.DeepEqual(fromSpec, toSpec)
+	if requiresUpdate {
+		unstructured.SetNestedMap(to.Object, fromSpec, "spec")
+	}
+	return requiresUpdate
+}
+
+// Copy configuration related fields to another instance and returns true if there
+// is a diff and thus needs to update.
+func CopyVirtualService(from, to *unstructured.Unstructured) bool {
 	fromSpec, found, err := unstructured.NestedMap(from.Object, "spec")
 	if !found {
 		return false
