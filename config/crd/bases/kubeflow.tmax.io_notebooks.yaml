@@ -1542,6 +1542,18 @@ spec:
                                         applies to the container.
                                       type: string
                                   type: object
+                                seccompProfile:
+                                  description: SeccompProfile defines a pod/container's seccomp profile settings. Only one profile source may be set.
+                                  properties:
+                                    localhostProfile:
+                                      description: localhostProfile indicates a profile defined in a file on the node should be used. The profile must be preconfigured on the node to work. Must be a descending path, relative to the kubelet's configured seccomp profile location. Must only be set if type is \"Localhost\".
+                                      type: string
+                                    type:
+                                      description: type indicates which kind of seccomp profile will be applied. Valid options are:\n\nLocalhost - a profile defined in a file on the node should be used. RuntimeDefault - the container runtime default profile should be used. Unconfined - no profile should be applied.
+                                      type: string
+                                  required:
+                                  - type
+                                  type: object    
                                 windowsOptions:
                                   description: The Windows specific settings applied
                                     to all containers. If unspecified, the options
@@ -2716,6 +2728,18 @@ spec:
                                         applies to the container.
                                       type: string
                                   type: object
+                                seccompProfile:
+                                  description: SeccompProfile defines a pod/container's seccomp profile settings. Only one profile source may be set.
+                                  properties:
+                                    localhostProfile:
+                                      description: localhostProfile indicates a profile defined in a file on the node should be used. The profile must be preconfigured on the node to work. Must be a descending path, relative to the kubelet's configured seccomp profile location. Must only be set if type is \"Localhost\".
+                                      type: string
+                                    type:
+                                      description: type indicates which kind of seccomp profile will be applied. Valid options are:\n\nLocalhost - a profile defined in a file on the node should be used. RuntimeDefault - the container runtime default profile should be used. Unconfined - no profile should be applied.
+                                      type: string
+                                  required:
+                                  - type
+                                  type: object    
                                 windowsOptions:
                                   description: The Windows specific settings applied
                                     to all containers. If unspecified, the options
@@ -3906,6 +3930,18 @@ spec:
                                         applies to the container.
                                       type: string
                                   type: object
+                                seccompProfile:
+                                  description: SeccompProfile defines a pod/container's seccomp profile settings. Only one profile source may be set.
+                                  properties:
+                                    localhostProfile:
+                                      description: localhostProfile indicates a profile defined in a file on the node should be used. The profile must be preconfigured on the node to work. Must be a descending path, relative to the kubelet's configured seccomp profile location. Must only be set if type is \"Localhost\".
+                                      type: string
+                                    type:
+                                      description: type indicates which kind of seccomp profile will be applied. Valid options are:\n\nLocalhost - a profile defined in a file on the node should be used. RuntimeDefault - the container runtime default profile should be used. Unconfined - no profile should be applied.
+                                      type: string
+                                  required:
+                                  - type
+                                  type: object    
                                 windowsOptions:
                                   description: The Windows specific settings applied
                                     to all containers. If unspecified, the options
@@ -4198,6 +4234,14 @@ spec:
                           a node''s labels for the pod to be scheduled on that node.
                           More info: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/'
                         type: object
+                      os:
+                        description: OS represents a OS used on notebooks.
+                        properties:
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object  
                       overhead:
                         additionalProperties:
                           anyOf:
@@ -4360,6 +4404,18 @@ spec:
                                   to the container.
                                 type: string
                             type: object
+                          seccompProfile:
+                            description: SeccompProfile defines a pod/container's seccomp profile settings. Only one profile source may be set.
+                            properties:
+                              localhostProfile:
+                                description: localhostProfile indicates a profile defined in a file on the node should be used. The profile must be preconfigured on the node to work. Must be a descending path, relative to the kubelet's configured seccomp profile location. Must only be set if type is \"Localhost\".
+                                type: string
+                              type:
+                                description: type indicates which kind of seccomp profile will be applied. Valid options are:\n\nLocalhost - a profile defined in a file on the node should be used. RuntimeDefault - the container runtime default profile should be used. Unconfined - no profile should be applied.
+                                type: string
+                            required:
+                            - type
+                            type: object  
                           supplementalGroups:
                             description: A list of groups applied to the first process
                               run in each container, in addition to the container's
@@ -4424,6 +4480,9 @@ spec:
                         description: 'ServiceAccountName is the name of the ServiceAccount
                           to use to run this pod. More info: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/'
                         type: string
+                      setHostnameAsFQDN:
+                        description: If true the pod's hostname will be configured as the pod's FQDN, rather than the leaf name (the default). In Linux containers, this means setting the FQDN in the hostname field of the kernel (the nodename field of struct utsname). In Windows containers, this means setting the registry value of hostname for the registry key HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters to FQDN. If a pod does not have FQDN, this has no effect. Default to false.
+                        type: boolean  
                       shareProcessNamespace:
                         description: 'Share a single process namespace between all
                           of the containers in a pod. When this is set containers

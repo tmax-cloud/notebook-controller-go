@@ -547,6 +547,9 @@ func generateService(instance *v1.Notebook) *corev1.Service {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name,
 			Namespace: instance.Namespace,
+			Annotations: map[string]string{
+				"traefik.ingress.kubernetes.io/service.serverstransport": "insecure@file",				
+			},
 		},
 		Spec: corev1.ServiceSpec{
 			Type:     "ClusterIP",
