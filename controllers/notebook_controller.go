@@ -488,7 +488,10 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 			"--upstream-keepalives=false",
 			"--skip-openid-provider-tls-verify=true",
 			"--skip-upstream-tls-verify=true",
-			"--enable-self-signed-tls",
+			"--tls-cert=/etc/secrets/tls.crt",
+			"--tls-private-key=/etc/secrets/tls.key",
+			"--tls-ca-certificate=/etc/secrets/ca.crt",
+			"--enable-self-signed-tls=false",
 			"--enable-refresh-tokens=true",
 			"--enable-default-deny=true",
 			"--enable-metrics=true",
@@ -548,7 +551,7 @@ func generateService(instance *v1.Notebook) *corev1.Service {
 			Name:      instance.Name,
 			Namespace: instance.Namespace,
 			Annotations: map[string]string{
-				"traefik.ingress.kubernetes.io/service.serverstransport": "insecure@file",				
+				"traefik.ingress.kubernetes.io/service.serverstransport": "tmaxcloud@file",				
 			},
 		},
 		Spec: corev1.ServiceSpec{
