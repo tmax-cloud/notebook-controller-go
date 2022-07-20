@@ -68,7 +68,7 @@ func main() {
 	flag.IntVar(&Burst, "burst", 0, "If it's zero, the created RESTClient will use DefaultBurst")
 	flag.IntVar(&QPS, "qps", 0, "If it's zero, the created RESTClient will use DefaultQPS")
 	opts := zap.Options{
-		Development: true,
+		Development: false,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
