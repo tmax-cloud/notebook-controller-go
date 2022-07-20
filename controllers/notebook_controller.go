@@ -472,12 +472,31 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 		}
 	}
 
+/*	if container.Command == nil {
+		container.Command = []string{"printenv"}
+	}*/
+
+	if container.Args == nil {
+		container.Args = []string{"sh","-c", "update-ca-certificates && jupyter lab --notebook-dir=/home/${NB_USER} --ip=0.0.0.0 --no-browser --allow-root --port=8888 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*' --NotebookApp.base_url=${NB_PREFIX}"}
+	}
+	
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name: "secret",
+		MountPath: "/usr/local/share/ca-certificates",
+	})		
+	
+/*	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name: "bins",
+		MountPath: "/home/jovyan/bin",
+	})		
+*/
 	clientsecret := os.Getenv("CLIENT_SECRET")
-    discoveryurl := os.Getenv("DISCOVERY_URL")
-			
+	discoveryurl := os.Getenv("DISCOVERY_URL")
+	gatekeeperVersion := os.Getenv("GATEKEEPER_VERSION")		
+	logLevel := os.Getenv("LOG_LEVEL")
 	podSpec.Containers = append(podSpec.Containers, corev1.Container{
 		Name:  "gatekeeper",
-		Image: "quay.io/keycloak/keycloak-gatekeeper:10.0.0",
+		Image: "docker.io/tmaxcloudck/gatekeeper:" + gatekeeperVersion,
 		Args: []string{
 			"--client-id=notebook-gatekeeper",
 			"--client-secret=" + clientsecret,
@@ -497,7 +516,7 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 			"--enable-metrics=true",
 			"--encryption-key=AgXa7xRcoClDEU0ZDSH4X0XhL5Qy2Z2j",
 			"--resources=uri=/*|roles=notebook-gatekeeper:notebook-gatekeeper-manager",
-			"--verbose",
+			"--log-level=" + logLevel,
 		},
 		Ports: []corev1.ContainerPort{
 			{
@@ -521,6 +540,17 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 			},
 		},
 	})
+
+/*	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: "bins",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: "bins",
+				},
+			},	
+		},
+	})*/
 
 	setPrefixEnvVar(instance, container)
 
