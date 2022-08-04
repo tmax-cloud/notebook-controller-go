@@ -620,7 +620,7 @@ func generateIngress(instance *v1.Notebook) (*netv1.Ingress, error) {
 	customDomain := os.Getenv("CUSTOM_DOMAIN")
 
 	tls = []netv1.IngressTLS{{		
-		Hosts:      []string{instance.Name + "." + customDomain},
+		Hosts:      []string{ingressName(name, namespace) + "." + customDomain},
 	}}
 	
 	pathTypePrefix := netv1.PathTypePrefix
@@ -646,7 +646,7 @@ func generateIngress(instance *v1.Notebook) (*netv1.Ingress, error) {
 			IngressClassName: ingressclassname,
 			Rules: []netv1.IngressRule{
 				{
-					Host: instance.Name + "." + customDomain,
+					Host: ingressName(name, namespace) + "." + customDomain,
 					IngressRuleValue: netv1.IngressRuleValue{
 						HTTP: &netv1.HTTPIngressRuleValue{
 							Paths: []netv1.HTTPIngressPath{
