@@ -474,7 +474,7 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 
 /*	if container.Command == nil {
 		container.Command = []string{"printenv"}
-	}*/
+	}
 
 	if container.Args == nil {
 		container.Args = []string{"sh","-c", "update-ca-certificates && jupyter lab --notebook-dir=/home/${NB_USER} --ip=0.0.0.0 --no-browser --allow-root --port=8888 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*' --NotebookApp.base_url=${NB_PREFIX}"}
@@ -485,7 +485,7 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 		MountPath: "/usr/local/share/ca-certificates",
 	})		
 	
-/*	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 		Name: "bins",
 		MountPath: "/home/jovyan/bin",
 	})		
@@ -602,7 +602,7 @@ func generateService(instance *v1.Notebook) *corev1.Service {
 }
 
 func ingressName(kfName string, namespace string) string {
-	return fmt.Sprintf("notebook-%s-%s", namespace, kfName)
+	return fmt.Sprintf("%s-%s", kfName, namespace)
 }
 
 func generateIngress(instance *v1.Notebook) (*netv1.Ingress, error) {
@@ -638,7 +638,7 @@ func generateIngress(instance *v1.Notebook) (*netv1.Ingress, error) {
 				"cert-manager.io/cluster-issuer": "tmaxcloud-issuer",
 			},
 			Labels: map[string]string{
-				"ingress.tmaxcloud.org/name":   instance.Name,				
+				"ingress.tmaxcloud.org/name":   ingressName(name, namespace),				
 			},
 		},
 		Spec: netv1.IngressSpec{
