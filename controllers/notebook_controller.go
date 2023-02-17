@@ -494,43 +494,92 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 	discoveryurl := os.Getenv("DISCOVERY_URL")
 	gatekeeperVersion := os.Getenv("GATEKEEPER_VERSION")		
 	logLevel := os.Getenv("LOG_LEVEL")
-	podSpec.Containers = append(podSpec.Containers, corev1.Container{
-		Name:  "gatekeeper",
-		Image: "docker.io/tmaxcloudck/gatekeeper:" + gatekeeperVersion,
-		Args: []string{
-			"--client-id=notebook-gatekeeper",
-			"--client-secret=" + clientsecret,
-			"--listen=:3000",
-			"--upstream-url=http://127.0.0.1:8888",
-			"--discovery-url=" + discoveryurl,
-			"--secure-cookie=false",
-			"--upstream-keepalives=false",
-			"--skip-openid-provider-tls-verify=true",
-			"--skip-upstream-tls-verify=true",
-			"--tls-cert=/etc/secrets/tls.crt",
-			"--tls-private-key=/etc/secrets/tls.key",
-			"--tls-ca-certificate=/etc/secrets/ca.crt",
-			"--enable-self-signed-tls=false",
-			"--enable-refresh-tokens=true",
-			"--enable-default-deny=true",
-			"--enable-metrics=true",
-			"--encryption-key=AgXa7xRcoClDEU0ZDSH4X0XhL5Qy2Z2j",
-			"--resources=uri=/*|roles=notebook-gatekeeper:notebook-gatekeeper-manager",
-			"--log-level=" + logLevel,
-		},
-		Ports: []corev1.ContainerPort{
-			{
-				Name:          "service",
-				ContainerPort: 3000,
+	isClosed := os.Getenv("IS_CLOSED")
+	registryName := os.Getenv("REGISTRY_NAME")
+	
+	imageOpened := "docker.io/tmaxcloudck/gatekeeper:" + gatekeeperVersion
+	imageClosed := registryName + "docker.io/tmaxcloudck/gatekeeper:" + gatekeeperVersion
+	
+	
+	if isClosed == "true" {
+		podSpec.Containers = append(podSpec.Containers, corev1.Container{
+			Name:  "gatekeeper",		
+			Image: imageClosed,
+			Args: []string{
+				"--client-id=notebook-gatekeeper",
+				"--client-secret=" + clientsecret,
+				"--listen=:3000",
+				"--upstream-url=http://127.0.0.1:8888",
+				"--discovery-url=" + discoveryurl,
+				"--secure-cookie=false",
+				"--upstream-keepalives=false",
+				"--skip-openid-provider-tls-verify=true",
+				"--skip-upstream-tls-verify=true",
+				"--tls-cert=/etc/secrets/tls.crt",
+				"--tls-private-key=/etc/secrets/tls.key",
+				"--tls-ca-certificate=/etc/secrets/ca.crt",
+				"--enable-self-signed-tls=false",
+				"--enable-refresh-tokens=true",
+				"--enable-default-deny=true",
+				"--enable-metrics=true",
+				"--encryption-key=AgXa7xRcoClDEU0ZDSH4X0XhL5Qy2Z2j",
+				"--resources=uri=/*|roles=notebook-gatekeeper:notebook-gatekeeper-manager",
+				"--log-level=" + logLevel,
 			},
-		},			
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "secret",
-				MountPath: "/etc/secrets",
+			Ports: []corev1.ContainerPort{
+				{
+					Name:          "service",
+					ContainerPort: 3000,
+				},
+			},			
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      "secret",
+					MountPath: "/etc/secrets",
+				},
 			},
-		},
-	})
+		})				
+	} else {
+		podSpec.Containers = append(podSpec.Containers, corev1.Container{
+			Name:  "gatekeeper",		
+			Image: imageOpened,
+			Args: []string{
+				"--client-id=notebook-gatekeeper",
+				"--client-secret=" + clientsecret,
+				"--listen=:3000",
+				"--upstream-url=http://127.0.0.1:8888",
+				"--discovery-url=" + discoveryurl,
+				"--secure-cookie=false",
+				"--upstream-keepalives=false",
+				"--skip-openid-provider-tls-verify=true",
+				"--skip-upstream-tls-verify=true",
+				"--tls-cert=/etc/secrets/tls.crt",
+				"--tls-private-key=/etc/secrets/tls.key",
+				"--tls-ca-certificate=/etc/secrets/ca.crt",
+				"--enable-self-signed-tls=false",
+				"--enable-refresh-tokens=true",
+				"--enable-default-deny=true",
+				"--enable-metrics=true",
+				"--encryption-key=AgXa7xRcoClDEU0ZDSH4X0XhL5Qy2Z2j",
+				"--resources=uri=/*|roles=notebook-gatekeeper:notebook-gatekeeper-manager",
+				"--log-level=" + logLevel,
+			},
+			Ports: []corev1.ContainerPort{
+				{
+					Name:          "service",
+					ContainerPort: 3000,
+				},
+			},			
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      "secret",
+					MountPath: "/etc/secrets",
+				},
+			},
+		})
+	}
+
+	
 
 	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
 		Name: "secret",
@@ -581,7 +630,7 @@ func generateService(instance *v1.Notebook) *corev1.Service {
 			Name:      instance.Name,
 			Namespace: instance.Namespace,
 			Annotations: map[string]string{
-				"traefik.ingress.kubernetes.io/service.serverstransport": "tmaxcloud@file",				
+				"traefik.ingress.kubernetes.io/service.serverstransport": "insecure@file",				
 			},
 		},
 		Spec: corev1.ServiceSpec{
