@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"k8s.io/utils/pointer"
 	reconcilehelper "github.com/tmax-cloud/notebook-controller-go/pkg/reconcilehelper"
 	"github.com/tmax-cloud/notebook-controller-go/api/v1"	
 	"github.com/tmax-cloud/notebook-controller-go/pkg/culler"
@@ -471,19 +472,23 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 			},
 		}
 	}
-
-/*	if container.Command == nil {
-		container.Command = []string{"printenv"}
-	}
-
-	if container.Args == nil {
-		container.Args = []string{"sh","-c", "update-ca-certificates && jupyter lab --notebook-dir=/home/${NB_USER} --ip=0.0.0.0 --no-browser --allow-root --port=8888 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*' --NotebookApp.base_url=${NB_PREFIX}"}
-	}
-	
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 		Name: "secret",
 		MountPath: "/usr/local/share/ca-certificates",
-	})		
+	})	
+	
+	if container.Args == nil {
+		container.Args = []string{"sh","-c", "update-ca-certificates && jupyter lab --notebook-dir=/home/${NB_USER} --ip=0.0.0.0 --no-browser --allow-root --port=8888 --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.allow_origin='*' --NotebookApp.base_url=${NB_PREFIX}"}
+	}
+
+	
+	
+	/*
+	if container.Command == nil {
+		container.Command = []string{"sh","-c", "sudo", "update-ca-certificates"}
+	}	
+	
+		
 	
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 		Name: "bins",
@@ -586,6 +591,16 @@ func generateStatefulSet(instance *v1.Notebook) *appsv1.StatefulSet {
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
 				SecretName: instance.Name + "-secret",
+				DefaultMode: pointer.Int32(0777),
+			},
+		},
+	})
+
+/*	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: "secret-self",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: "selfsigned-ca",				
 			},
 		},
 	})
